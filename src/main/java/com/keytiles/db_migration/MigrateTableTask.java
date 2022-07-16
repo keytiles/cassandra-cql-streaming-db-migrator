@@ -6,6 +6,8 @@ import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import javax.annotation.Nullable;
@@ -76,6 +78,8 @@ public class MigrateTableTask implements Runnable {
 	private final CassandraConnectionAdapter sourceConnectionAdapter;
 	private final CassandraConnectionAdapter targetConnectionAdapter;
 
+	private final ExecutorService writeExecutorService;
+
 	private TableMetadata sourceTableMeta;
 	private TableMetadata targetTableMeta;
 	private int rowsRead = 0;
@@ -127,6 +131,9 @@ public class MigrateTableTask implements Runnable {
 					: tableMigrationDefinition.tableName + "=>" + tableMigrationDefinition.targetTableName;
 		}
 		this.name = name;
+
+		// writeExecutorService =
+		writeExecutorService = Executors.newFixedThreadPool(tableMigrationDefinition.parallelWriteRowCount);
 
 		this.tableMigrationDefinition = tableMigrationDefinition;
 		this.sourceConnectionAdapter = sourceConnectionAdapter;
@@ -412,6 +419,10 @@ public class MigrateTableTask implements Runnable {
 
 		// OK we have metadata!
 		return ksMetadata.get().getTable(tableName).get();
+	}
+
+	private static class RowMigrationTask {
+
 	}
 
 	/**

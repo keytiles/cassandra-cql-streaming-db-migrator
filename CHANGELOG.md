@@ -1,4 +1,15 @@
 
+# release 1.1.0
+
+## Breaking changes:
+none
+
+## New features:
+ * Enhancing parallel writes
+ 
+## Bug fixes:
+none
+
 # release 1.0.1
 
 ## Breaking changes:
