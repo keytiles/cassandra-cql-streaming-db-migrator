@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration debug="false" scan="false">
+	<jmxConfigurator />
+	
+	<appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+		<target>System.out</target>
+		<filter class="ch.qos.logback.classic.filter.LevelFilter">
+          <level>DEBUG</level>
+          <onMatch>ACCEPT</onMatch>
+        </filter>
+        <filter class="ch.qos.logback.classic.filter.LevelFilter">
+          <level>INFO</level>
+          <onMatch>ACCEPT</onMatch>
+        </filter>
+        <filter class="ch.qos.logback.classic.filter.LevelFilter">
+          <level>TRACE</level>
+          <onMatch>ACCEPT</onMatch>
+        </filter>
+        <filter class="ch.qos.logback.classic.filter.LevelFilter">
+          <level>WARN</level>
+          <onMatch>DENY</onMatch>
+        </filter>
+        <filter class="ch.qos.logback.classic.filter.LevelFilter">
+          <level>ERROR</level>
+          <onMatch>DENY</onMatch>
+        </filter>		
+		<encoder class="ch.qos.logback.classic.encoder.PatternLayoutEncoder">
+			<Pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger - %msg%n</Pattern>
+		</encoder>
+	</appender>
+	<appender name="STDERR" class="ch.qos.logback.core.ConsoleAppender">
+		<target>System.err</target>
+		<filter class="ch.qos.logback.classic.filter.LevelFilter">
+          <level>DEBUG</level>
+          <onMatch>DENY</onMatch>
+        </filter>
+        <filter class="ch.qos.logback.classic.filter.LevelFilter">
+          <level>INFO</level>
+          <onMatch>DENY</onMatch>
+        </filter>
+        <filter class="ch.qos.logback.classic.filter.LevelFilter">
+          <level>TRACE</level>
+          <onMatch>DENY</onMatch>
+        </filter>
+        <filter class="ch.qos.logback.classic.filter.LevelFilter">
+          <level>WARN</level>
+          <onMatch>ACCEPT</onMatch>
+        </filter>
+        <filter class="ch.qos.logback.classic.filter.LevelFilter">
+          <level>ERROR</level>
+          <onMatch>ACCEPT</onMatch>
+        </filter>		
+		<encoder class="ch.qos.logback.classic.encoder.PatternLayoutEncoder">
+			<Pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger - %msg%n</Pattern>
+		</encoder>
+	</appender>
+
+
+	<!-- limit Cassandra output - even INFO is too much... -->
+	<logger name="org.apache.cassandra" level="ERROR" additivity="false">
+		<appender-ref ref="STDOUT" />
+		<appender-ref ref="STDERR" />
+	</logger>
+	<!-- limit Cassandra driver output - even INFO is too much... -->
+	<logger name="com.datastax" level="ERROR" additivity="false">
+		<appender-ref ref="STDOUT" />
+		<appender-ref ref="STDERR" />
+	</logger>
+
+	<!-- by default for Keytiles classes we want DEBUG level logs -->
+	<logger name="com.keytiles" level="DEBUG" additivity="false">
+		<appender-ref ref="STDOUT" />
+		<appender-ref ref="STDERR" />
+	</logger>
+	
+	<!-- by default we need INFO level -->
+	<root level="INFO" additivity="false">
+		<appender-ref ref="STDOUT" />
+		<appender-ref ref="STDERR" />
+	</root>
+</configuration>

@@ -1,0 +1,124 @@
+
+# Tool is capable of run table migrations (see below, "tables" entry) in parallel on worker threads
+# This value is the number of worker threads
+threadCount: 1
+
+# It's very useful to see time by time the table migration status
+# The only question is: how often you want?
+printStatusEveryXSeconds: 10
+
+# Setup the source database connection
+sourceDB:
+  keyspaceName: <name of the Keyspace where the tables are>
+  contactNodes: <source db host>:9042
+  # you can use CQL: "select data_center from system.local;" to fetch the below
+  contactNodesDatacenterName: <datacenter name of source db contactNodes>
+
+# setup the target database connection
+targetDB:
+  keyspaceName: <name of the Keyspace where the target tables are>
+  contactNodes: <target db host>:9042
+  # you can use CQL: "select data_center from system.local;" to fetch the below
+  contactNodesDatacenterName: <datacenter name of target db contactNodes>
+
+# List of table migrations
+tables:
+# The below contains all fields you can use in a table migration definition
+# For exact details which field means what - see com.keytiles.db_migration.model.config.TableMigrationDefinition class Javadoc!
+# 
+#  - tableName: <table name>
+#    targetTableName: <name of target table - if different>
+#    simulateOnly: true|false
+#    whereClause: <the where clause added to the query>
+#    maxReadRowCount: <max num of rows to read from source>
+#    maxWriteRowCount: <max num of rows to write to target>
+#    respectTTL: true|false
+#    pageSize: 1000
+#    pauseMillisBetweenPages: 100
+#    continueOnRowError: true|false
+#    insertOnlyIfNotExist: true|false
+#    readQueryTimeoutMillis: 10000
+#    writeQueryTimeoutMillis: 10000
+#
+#    # The default is: com.keytiles.db_migration.implementation.DefaultMigratorPlugin
+#    # but of course you can use custom one too
+#    migratorPluginDefinition:
+#      migratorPluginClass: <fully qualified class name of plugin>
+#      migratorOptions:
+#        opt1: value1
+#        opt2: value2
+#    # Data filter is NULL by default so every row will make it
+#    dataFilterDefinitions:
+#      - filterClass: <fully qualified class name>
+#        filterOptions:
+#          opt1: value1
+#          opt2: value2
+#        maxRowsBatchSize: 100
+      
+# This is the simplest setup
+# Migrating all data of 'my_source_table_1' with default migration settings
+  - tableName: my_source_table_1
+    simulateOnly: false
+    continueOnRowError: true
+
+# Similar but in the target DB we want our data in 'my_source_table_2_clone' table and not 'my_source_table_2'
+# This will also stop immediately if runs into any error due to 'continueOnRowError' setup
+# Instead of the default 'pageSize' (which is 1000) we want to go with bigger pages on this table 
+  - tableName: my_source_table_2
+    targetTableName: my_source_table_2_clone
+    simulateOnly: false
+    pageSize: 5000
+    continueOnRowError: false
+
+# This time we apply a 'whereClause' on our source table record
+# and also just simulate the migration (so the execution of writeQuery will be skipped) to get a feeling
+# plus we stop after 2000 rows would have been actually migrated (due to simulation it is not) to the target table
+  - tableName: my_source_table_3
+    #targetTableName: my_source_table_3_clone
+    whereClause: part_key_col_1='abcd' AND clust_key_col_1 IN (1, 2, 3) AND clust_key_col_2 >= 3000 AND clust_key_col_2 < 10000
+    maxWriteRowCount: 2000
+    simulateOnly: true
+    continueOnRowError: true
+
+# Let's take the previous example, but this time what if you want to filter actually only on 'clust_key_col_2' column?
+# In CQL you are in trouble then but you can use the built in in-memory filtering for that!
+# note: of course in this case you will stream through the full table...
+  - tableName: my_source_table_3
+    #targetTableName: my_source_table_3_clone
+    #whereClause: part_key_col_1='abcd' AND clust_key_col_1 IN (1, 2, 3) AND clust_key_col_2 >= 3000 AND clust_key_col_2 < 10000
+    maxWriteRowCount: 2000
+    simulateOnly: true
+    continueOnRowError: true
+    dataFilterDefinitions:
+      - filterClass: com.keytiles.db_migration.implementation.FieldValueFilter
+        filterOptions:
+          mvelRule: row.clust_key_col_2 >= 3000 && row.clust_key_col_2 < 10000
+          
+# Last but not least even a more advanced sample - let's assume we added a numerical hashing field into one of our tables
+# and we want to migrate all data from the deprecated _v1 table into our new _v2 table where we actually want to compute
+# that hash. In this case it is possible to use the advanced feature of the DefaultMigratorPlugin (yes, the tool is
+# pluginnable, see interfaces defined in com.keytiles.db_migration.api package!)
+# So we have
+# - 'my_table_v1' who has 'my_col' VARCHAR column
+# - 'my_table_v2' who has 'my_col' VARCHAR column plus a numerical 0-31 hash computed from that column in 'my_col_hash' SMALLINT
+# then to migrate all data (which is not yet migrated - see 'insertOnlyIfNotExist' you can do this:
+  - tableName: my_table_v1
+    targetTableName: my_table_v2
+    continueOnRowError: false
+    insertOnlyIfNotExist: true
+    migratorPluginDefinition:
+      migratorPluginClass: com.keytiles.db_migration.implementation.DefaultMigratorPlugin
+      migratorOptions:
+        calculatedColumns:
+        - columnName: my_col_hash
+          mvelExpression: '
+            int hash = row.my_col.hashCode();
+            if (hash < 0) {
+              hash *= -1;
+            }
+            hash %= 32;
+            return (short) hash;'
+
+
+
+     

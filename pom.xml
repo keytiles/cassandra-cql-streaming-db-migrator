@@ -1,0 +1,336 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+	<groupId>com.keytiles</groupId>
+	<artifactId>cassandra-cql-streaming-db-migrator</artifactId>
+	<version>1.0.1</version>
+	<packaging>jar</packaging>
+	<name>keytiles db migration</name>
+	<description>Tool to handle Cassandra CQL compliant database migrations in a streaming fashion.</description>
+
+	<pluginRepositories>
+		<pluginRepository>
+			<id>maven1</id>
+			<name>Maven.org</name>
+			<url>https://repo1.maven.org/maven2</url>
+		</pluginRepository>
+	</pluginRepositories>
+
+	<distributionManagement>
+		<repository>
+			<id>swf-technology-public-releases</id>
+			<name>SWF Nexus Releases repo</name>
+			<url>http://nexus.swf.technology/nexus/content/repositories/public-releases/</url>
+		</repository>
+		<snapshotRepository>
+			<id>swf-technology-public-snapshots</id>
+			<name>SWF Nexus Snapshots repo</name>
+			<url>http://nexus.swf.technology/nexus/content/repositories/public-snapshots/</url>
+		</snapshotRepository>
+	</distributionManagement>
+
+	<properties>
+		<mainClass>com.keytiles.db_migration.Main</mainClass>
+
+		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+
+		<!-- Plugins -->
+		<java.version>1.8</java.version>
+		<maven.dependency.plugin>2.8</maven.dependency.plugin>
+		<maven.compiler.plugin>3.8.0</maven.compiler.plugin>
+		<maven.release.plugin>2.5.3</maven.release.plugin>
+		<maven.jar.plugin>3.1.1</maven.jar.plugin>
+		<maven.assembly.plugin>3.1.1</maven.assembly.plugin>
+
+		<junit.version>4.13</junit.version>
+
+		<cassandra.driver.version>4.12.0</cassandra.driver.version>
+		<io.netty.version>4.1.51.Final</io.netty.version>
+
+		<slf4j.version>1.7.25</slf4j.version>
+		<logback.version>1.2.3</logback.version>
+
+		<apache.commons.lang3.version>3.6</apache.commons.lang3.version>
+		<apache.commons.cli.version>1.4</apache.commons.cli.version>
+		<apache.commons.io.version>2.7</apache.commons.io.version>
+
+		<!-- this must be with sync with java-automated-testsuite's guava version! -->
+		<google.guava.version>29.0-jre</google.guava.version>
+
+		<jackson.version>2.13.0</jackson.version>
+		
+		<metrics.version>3.2.2</metrics.version>
+		
+	</properties>
+
+	<build>
+	
+		<testResources>
+			<testResource>
+				<directory>src/test/resources</directory>
+				<targetPath>test-resources</targetPath>
+			</testResource>
+		</testResources>
+	
+
+		<!-- PLUGINS -->
+		<plugins>
+
+			<plugin>
+				<artifactId>maven-compiler-plugin</artifactId>
+				<version>${maven.compiler.plugin}</version>
+				<configuration>
+					<source>${java.version}</source>
+					<target>${java.version}</target>
+					<compilerArgs>
+						<!-- this is added because of th "ServiceInsight" tool to let it correctly match bean
+						     Constructor arguments by name -->
+						<arg>-parameters</arg>
+					</compilerArgs>
+				</configuration>
+			</plugin>
+
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-release-plugin</artifactId>
+				<version>${maven.release.plugin}</version>
+				<configuration>
+					<tagNameFormat>v@{project.version}</tagNameFormat>
+				</configuration>
+			</plugin>
+
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-javadoc-plugin</artifactId>
+				<configuration>
+					<additionalparam>-Xdoclint:none</additionalparam>
+				</configuration>
+			</plugin>
+
+			<!-- for copy dep .jars - usage: > mvn package dependency:copy-dependencies -->
+			<plugin>
+				<artifactId>maven-dependency-plugin</artifactId>
+				<!-- <version>${maven.dependency.plugin}</version> -->
+				<executions>
+					<execution>
+						<phase>install</phase>
+						<goals>
+							<goal>copy-dependencies</goal>
+						</goals>
+						<configuration>
+							<!-- <outputDirectory>${project.build.directory}/dependency-jars</outputDirectory> -->
+							<outputDirectory>${project.build.directory}/lib</outputDirectory>
+						</configuration>
+					</execution>
+				</executions>
+			</plugin>
+
+			<plugin>
+				<artifactId>maven-jar-plugin</artifactId>
+				<version>${maven.jar.plugin}</version>
+				<configuration>
+					<archive>
+						<manifest>
+							<addClasspath>true</addClasspath>
+							<classpathPrefix>lib</classpathPrefix>
+							<mainClass>${mainClass}</mainClass>
+						</manifest>
+					</archive>
+				</configuration>
+			</plugin>
+
+			<plugin>
+				<artifactId>maven-assembly-plugin</artifactId>
+				<version>${maven.assembly.plugin}</version>
+				<executions>
+					<execution>
+						<phase>package</phase>
+						<goals>
+							<goal>single</goal>
+						</goals>
+						<configuration>
+							<appendAssemblyId>false</appendAssemblyId>
+							<archive>
+								<manifest>
+									<mainClass>${mainClass}</mainClass>
+								</manifest>
+							</archive>
+							<!-- <descriptors> -->
+							<!-- <descriptor>assembly.xml</descriptor> assembly.xml file must 
+								be in-place in child project. -->
+							<!-- </descriptors> -->
+							<descriptorRefs>
+								<descriptorRef>jar-with-dependencies</descriptorRef>
+							</descriptorRefs>
+						</configuration>
+					</execution>
+				</executions>
+			</plugin>
+
+		</plugins>
+
+	</build>
+
+	<!-- what dependency goes here that is for all child modules -->
+	<dependencies>
+
+		<dependency>
+			<groupId>junit</groupId>
+			<artifactId>junit</artifactId>
+			<version>${junit.version}</version>
+			<scope>test</scope>
+		</dependency>
+
+
+		<!-- *********************************************************************************************** -->
+		<!-- Usual Apache, Google, etc usefaul stuff -->
+		<!-- *********************************************************************************************** -->
+
+		<dependency>
+			<groupId>org.apache.commons</groupId>
+			<artifactId>commons-lang3</artifactId>
+			<version>${apache.commons.lang3.version}</version>
+		</dependency>
+
+		<dependency>
+			<groupId>commons-cli</groupId>
+			<artifactId>commons-cli</artifactId>
+			<version>${apache.commons.cli.version}</version>
+		</dependency>
+
+
+		<dependency>
+			<groupId>org.slf4j</groupId>
+			<artifactId>slf4j-api</artifactId>
+			<version>${slf4j.version}</version>
+		</dependency>
+		<!-- <dependency> <groupId>org.slf4j</groupId> <artifactId>slf4j-simple</artifactId> 
+			<version>${slf4j.version}</version> </dependency> -->
+
+		<dependency>
+			<groupId>ch.qos.logback</groupId>
+			<artifactId>logback-core</artifactId>
+			<version>${logback.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>ch.qos.logback</groupId>
+			<artifactId>logback-classic</artifactId>
+			<version>${logback.version}</version>
+		</dependency>
+
+
+		<dependency>
+			<groupId>com.google.guava</groupId>
+			<artifactId>guava</artifactId>
+			<version>${google.guava.version}</version>
+		</dependency>
+
+		<dependency>
+			<groupId>commons-io</groupId>
+			<artifactId>commons-io</artifactId>
+			<version>${apache.commons.io.version}</version>
+		</dependency>
+
+		<dependency>
+		    <groupId>org.mvel</groupId>
+		    <artifactId>mvel2</artifactId>
+		    <version>2.4.13.Final</version>
+		</dependency>
+		
+		<dependency>
+			<groupId>io.dropwizard.metrics</groupId>
+			<artifactId>metrics-core</artifactId>
+			<version>${metrics.version}</version>
+		</dependency>
+		
+
+
+		<!-- *********************************************************************************************** -->
+		<!-- JSON + YAML -->
+		<!-- *********************************************************************************************** -->
+
+		<dependency>
+			<groupId>com.fasterxml.jackson.core</groupId>
+			<artifactId>jackson-databind</artifactId>
+			<version>${jackson.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>com.fasterxml.jackson.core</groupId>
+			<artifactId>jackson-annotations</artifactId>
+			<version>${jackson.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>com.fasterxml.jackson.core</groupId>
+			<artifactId>jackson-core</artifactId>
+			<version>${jackson.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>com.fasterxml.jackson.datatype</groupId>
+			<artifactId>jackson-datatype-guava</artifactId>
+			<version>${jackson.version}</version>
+		</dependency>
+		<dependency>
+		    <groupId>com.fasterxml.jackson.dataformat</groupId>
+		    <artifactId>jackson-dataformat-yaml</artifactId>
+		    <version>${jackson.version}</version>
+		</dependency>
+
+		<!-- *********************************************************************************************** -->
+		<!-- Cassandra -->
+		<!-- *********************************************************************************************** -->
+
+		<!-- for some reason the onboraded dependencies by cassandra-driver-core 
+			was not working... had to include these... -->
+			<dependency>
+				<groupId>io.netty</groupId>
+				<artifactId>netty-all</artifactId>
+				<version>${io.netty.version}</version>
+			</dependency>
+
+
+<!-- 			<dependency> -->
+<!-- 				<groupId>com.datastax.cassandra</groupId> -->
+<!-- 				<artifactId>cassandra-driver-core</artifactId> -->
+<!-- 				<version>${cassandra.datastax.version}</version> -->
+<!-- 				<exclusions> -->
+<!-- 					<exclusion> -->
+<!-- 						<groupId>io.netty</groupId> -->
+<!-- 						<artifactId>*</artifactId> -->
+<!-- 					</exclusion> -->
+<!-- 				</exclusions> -->
+<!-- 			</dependency> -->
+
+		<dependency>
+			<groupId>com.datastax.oss</groupId>
+			<artifactId>java-driver-core</artifactId>
+			<version>${cassandra.driver.version}</version>
+			<exclusions>
+				<exclusion>
+					<groupId>io.netty</groupId>
+					<artifactId>*</artifactId>
+				</exclusion>
+			</exclusions>
+		</dependency>
+		<dependency>
+			<groupId>com.datastax.oss</groupId>
+			<artifactId>java-driver-query-builder</artifactId>
+			<version>${cassandra.driver.version}</version>
+		</dependency>
+		
+		<!-- see: https://docs.datastax.com/en/developer/java-driver/4.10/manual/mapper/ 
+		     this is an ORM layer might worth to check later ...-->
+		<dependency>
+			<groupId>com.datastax.oss</groupId>
+			<artifactId>java-driver-mapper-runtime</artifactId>
+			<version>${cassandra.driver.version}</version>
+		</dependency>
+
+
+		<!-- *********************************************************************************************** -->
+		<!-- Own libs -->
+		<!-- *********************************************************************************************** -->
+
+
+	</dependencies>
+
+
+</project>
