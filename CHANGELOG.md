@@ -6,9 +6,12 @@ none
 
 ## New features:
  * Enhancing parallel writes
+    * Introduced TableMigrationDefinition.parallelWriteRowCount
+    * Main config 'threadCount' now taking one configured TableMigrationDefinition and deals with that.
  
 ## Bug fixes:
-none
+ * TableMigrationDefinition.respectTTL did not do anything - now it really works
+
 
 # release 1.0.1
 

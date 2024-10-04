@@ -6,9 +6,13 @@ import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 import javax.annotation.Nullable;
 
@@ -78,7 +82,7 @@ public class MigrateTableTask implements Runnable {
 	private final CassandraConnectionAdapter sourceConnectionAdapter;
 	private final CassandraConnectionAdapter targetConnectionAdapter;
 
-	private final ExecutorService writeExecutorService;
+	private ExecutorService writeExecutorService;
 
 	private TableMetadata sourceTableMeta;
 	private TableMetadata targetTableMeta;
@@ -131,9 +135,6 @@ public class MigrateTableTask implements Runnable {
 					: tableMigrationDefinition.tableName + "=>" + tableMigrationDefinition.targetTableName;
 		}
 		this.name = name;
-
-		// writeExecutorService =
-		writeExecutorService = Executors.newFixedThreadPool(tableMigrationDefinition.parallelWriteRowCount);
 
 		this.tableMigrationDefinition = tableMigrationDefinition;
 		this.sourceConnectionAdapter = sourceConnectionAdapter;
@@ -288,6 +289,8 @@ public class MigrateTableTask implements Runnable {
 		millisSpentWithReading = 0;
 		millisSpentWithWriting = 0;
 
+		writeExecutorService = Executors.newFixedThreadPool(tableMigrationDefinition.parallelWriteRowCount);
+
 		try {
 
 			// the read query
@@ -357,6 +360,9 @@ public class MigrateTableTask implements Runnable {
 
 			state = State.finished;
 			finishedTimestamp = System.currentTimeMillis();
+
+			writeExecutorService.shutdownNow();
+			writeExecutorService = null;
 		}
 	}
 
@@ -430,8 +436,10 @@ public class MigrateTableTask implements Runnable {
 	 * what is passed the filter
 	 *
 	 * @param fetchedRows
+	 * @throws IllegalStateException
+	 *             in case error occured and we need to abort the full process
 	 */
-	private void migrateFetchedRows(List<Row> fetchedRows) {
+	private void migrateFetchedRows(List<Row> fetchedRows) throws IllegalStateException {
 
 		long startedAt = System.currentTimeMillis();
 
@@ -442,38 +450,117 @@ public class MigrateTableTask implements Runnable {
 		}
 		rowsPassedFilter += filteredRows.size();
 
-		boolean abort = false;
-		Iterator<Row> rowsIterator = filteredRows.iterator();
-		while (rowsIterator.hasNext() && !abort) {
-			Row row = rowsIterator.next();
+		// === Step 1 - let's assemble a list of WriteRowTasks for each row to migrate!
 
-			if (isMaxWriteRowCountReached()) {
-				// let's exit - limit reached
-				abort = true;
+		Iterator<Row> rowsIterator = filteredRows.iterator();
+		List<WriteRowTask> writeRowTasks = new ArrayList<>(filteredRows.size());
+		while (rowsIterator.hasNext() && !isMaxWriteRowCountReached()) {
+			Row row = rowsIterator.next();
+			// creating a row write task and adding it to the list
+			writeRowTasks.add(new WriteRowTask(tableMigrationDefinition, migratorPlugin, row));
+		}
+
+		// === Step 2 - now give them to the executor threads and wait for them to complete (or fail)
+
+		try {
+
+			if (!writeRowTasks.isEmpty()) {
+				// now let's execute them all!
+				List<Future<Boolean>> futures = new ArrayList<>(writeRowTasks.size());
+				for (WriteRowTask task : writeRowTasks) {
+					futures.add(writeExecutorService.submit(task));
+				}
+
+				// and now let's wait until all completes (or something happens...)
+				boolean wait = true;
+				while (wait) {
+
+					// start with a small sleep...
+					try {
+						Thread.sleep(100);
+					} catch (InterruptedException e) {
+					}
+
+					// let's collect which is done!
+					List<Future<Boolean>> futuresJustCompleted = futures.stream().filter(item -> {
+						return item.isDone();
+					}).collect(Collectors.toList());
+
+					// remove all of them from the full list
+					futures.removeAll(futuresJustCompleted);
+
+					LOG.trace("{} - {} rows write just completed... {} more to go in the batch",
+							tableMigrationDefinition.tableName, futuresJustCompleted.size(), futures.size());
+
+					// now let's check which were completed now!
+					for (Future<Boolean> futureCompleted : futuresJustCompleted) {
+						try {
+							if (futureCompleted.get()) {
+								rowsMigrated++;
+							}
+						} catch (ExecutionException e) {
+							// this stuff failed
+							rowsFailed++;
+
+							// should we abort everything?
+							if (!tableMigrationDefinition.continueOnRowError) {
+								LOG.error("row insert failed, aborting all non completed row migrations...");
+								futures.forEach(futureItem -> {
+									futureItem.cancel(true);
+								});
+								throw new IllegalStateException(
+										"row insert failed and continueOnRowError=false so aborting...");
+							}
+						} catch (Exception e) {
+							// and here what?
+						}
+					}
+
+					wait = !futures.isEmpty();
+				}
 			}
 
-			if (!abort) {
-				try {
-					if (migratorPlugin.migrateRow(row)) {
-						rowsMigrated++;
-					}
-				} catch (Exception e) {
-					rowsFailed++;
-					String msg = "row migration failed with exception: " + e;
-					if (tableMigrationDefinition.continueOnRowError) {
-						// this just a warning then
-						LOG.warn(msg);
-					} else {
-						// hard error
-						throw new IllegalStateException(msg, e);
-					}
+		} catch (Exception e) {
+			// if we get here we exit with exception
+			throw new IllegalStateException("error occured - aborting full table migration", e);
+		} finally {
+			long writeTookMillis = System.currentTimeMillis() - startedAt;
+			writeBatchTookMillisHistogram.update(writeTookMillis);
+			millisSpentWithWriting += writeTookMillis;
+		}
+
+	}
+
+	public final static class WriteRowTask implements Callable<Boolean> {
+
+		public final IMigratorPlugin migratorPlugin;
+		public final TableMigrationDefinition tableMigrationDefinition;
+		public final Row row;
+
+		public WriteRowTask(TableMigrationDefinition tableMigrationDefinition, IMigratorPlugin migratorPlugin,
+				Row row) {
+			this.tableMigrationDefinition = tableMigrationDefinition;
+			this.migratorPlugin = migratorPlugin;
+			this.row = row;
+		}
+
+		@Override
+		public Boolean call() throws Exception {
+			try {
+				return migratorPlugin.migrateRow(row);
+			} catch (Exception e) {
+				String msg = "row migration failed with exception";
+				if (tableMigrationDefinition.continueOnRowError) {
+					// this just a warning then
+					LOG.warn(msg, e);
+				} else {
+					// now its an error
+					LOG.error(msg, e);
 				}
+				throw new IllegalStateException(msg, e);
 			}
 		}
 
-		long writeTookMillis = System.currentTimeMillis() - startedAt;
-		writeBatchTookMillisHistogram.update(writeTookMillis);
-		millisSpentWithWriting += writeTookMillis;
 	}
 
 	private boolean isMaxWriteRowCountReached() {

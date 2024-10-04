@@ -180,7 +180,7 @@ public class CassandraSchemaUtil {
 		} else if (type instanceof PrimitiveType) {
 
 			if ("tinyint".equalsIgnoreCase(cqlType)) {
-				typeInfo = new JavaTypeInfo(Short.class, cqlType);
+				typeInfo = new JavaTypeInfo(Byte.class, cqlType);
 			} else if ("smallint".equalsIgnoreCase(cqlType)) {
 				typeInfo = new JavaTypeInfo(Short.class, cqlType);
 			} else if ("int".equalsIgnoreCase(cqlType)) {
@@ -200,6 +200,8 @@ public class CassandraSchemaUtil {
 			} else if ("varchar".equalsIgnoreCase(cqlType)) {
 				typeInfo = new JavaTypeInfo(String.class, cqlType);
 			} else if ("text".equalsIgnoreCase(cqlType)) {
+				typeInfo = new JavaTypeInfo(String.class, cqlType);
+			} else if ("ascii".equalsIgnoreCase(cqlType)) {
 				typeInfo = new JavaTypeInfo(String.class, cqlType);
 			} else if ("uuid".equalsIgnoreCase(cqlType)) {
 				typeInfo = new JavaTypeInfo(UUID.class, cqlType);

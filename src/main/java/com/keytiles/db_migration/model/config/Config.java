@@ -40,7 +40,11 @@ public class Config extends BaseEntity {
 	public List<TableMigrationDefinition> tables;
 
 	/**
-	 * Number of worker threads running migrations (it is done on a table basis)
+	 * Number of worker threads running migrations - each worker thread deals with one configured table
+	 * migration at a time. And they are executed in the order you defined them.
+	 *
+	 * WARNING! Increase this count >1 only in case ALL your table migrations are independent from any
+	 * previous table migrations! As if we do them in parallel then this dependency might be violated!
 	 */
 	public int threadCount = 1;
 
