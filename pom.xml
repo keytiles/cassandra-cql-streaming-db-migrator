@@ -2,7 +2,7 @@
 	<modelVersion>4.0.0</modelVersion>
 	<groupId>com.keytiles</groupId>
 	<artifactId>cassandra-cql-streaming-db-migrator</artifactId>
-	<version>1.0.1</version>
+	<version>1.1.0</version>
 	<packaging>jar</packaging>
 	<name>keytiles db migration</name>
 	<description>Tool to handle Cassandra CQL compliant database migrations in a streaming fashion.</description>

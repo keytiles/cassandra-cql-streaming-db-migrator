@@ -91,6 +91,13 @@ public class TableMigrationDefinition extends BaseEntity {
 	public long pauseMillisBetweenPages = 0;
 
 	/**
+	 * Table data migration supports concurrent execution of writing rows into the target table (from
+	 * the page controlled by {@link #pageSize} just read from the source table). This setting controls
+	 * the number of write-threads.
+	 */
+	public int parallelWriteRowCount = 1;
+
+	/**
 	 * Optional filters to use over the table data during the migration
 	 * <p>
 	 * The filters are executed in order - forming up a chain if multiple is given

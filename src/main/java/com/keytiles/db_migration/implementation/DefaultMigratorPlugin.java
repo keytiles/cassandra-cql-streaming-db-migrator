@@ -123,8 +123,10 @@ public class DefaultMigratorPlugin implements IMigratorPlugin {
 		targetTableColumnJavaTypes = CassandraSchemaUtil.getColJavaTypesByColumnNames(targetTableMeta);
 		isTargetCounterTable = CassandraSchemaUtil.isCounterTable(targetTableMeta);
 
-		sourceTableTTL = CassandraSchemaUtil.getTableLevelTTL(sourceTableMeta);
-		targetTableTTL = CassandraSchemaUtil.getTableLevelTTL(targetTableMeta);
+		if (tableMigrationDefinition.respectTTL) {
+			sourceTableTTL = CassandraSchemaUtil.getTableLevelTTL(sourceTableMeta);
+			targetTableTTL = CassandraSchemaUtil.getTableLevelTTL(targetTableMeta);
+		}
 
 		// order is important here!
 		// as createReadQuery will control ttlCalculationColumn field
@@ -415,6 +417,9 @@ public class DefaultMigratorPlugin implements IMigratorPlugin {
 		if (Short.class.equals(javaTypeInfo.mainType)) {
 			Short value = (Short) genericValue;
 			bs.set(colName, value, Short.class);
+		} else if (Byte.class.equals(javaTypeInfo.mainType)) {
+			Byte value = (Byte) genericValue;
+			bs.set(colName, value, Byte.class);
 		} else if (Integer.class.equals(javaTypeInfo.mainType)) {
 			Integer value = (Integer) genericValue;
 			bs.set(colName, value, Integer.class);
