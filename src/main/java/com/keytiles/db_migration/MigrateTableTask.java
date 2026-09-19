@@ -66,8 +66,8 @@ public class MigrateTableTask implements Runnable {
 
 	/**
 	 * Filters for this table migration, plus optional chunk size for filter/write batches.
-	 * {@code maxRowsBatchSize} is the minimum of configured filter {@code maxRowsBatchSize} values,
-	 * or {@code null} when no filter limits chunking (whole driver page is processed at once).
+	 * {@code maxRowsBatchSize} is the minimum of configured filter {@code maxRowsBatchSize} values, or
+	 * {@code null} when no filter limits chunking (whole driver page is processed at once).
 	 */
 	private static class RowFilters extends BaseEntity {
 		private final List<IRowSetFilter> rowSetFilters;
@@ -88,6 +88,7 @@ public class MigrateTableTask implements Runnable {
 	}
 
 	private final String name;
+	private final int index;
 
 	private final TableMigrationDefinition tableMigrationDefinition;
 	private final CassandraConnectionAdapter sourceConnectionAdapter;
@@ -141,7 +142,7 @@ public class MigrateTableTask implements Runnable {
 	/** How many times page size was reduced so far in this task (capped by maxIteration). */
 	private int pageSizeReduceIterationsApplied;
 
-	public MigrateTableTask(TableMigrationDefinition tableMigrationDefinition,
+	public MigrateTableTask(int index, TableMigrationDefinition tableMigrationDefinition,
 			CassandraConnectionAdapter sourceConnectionAdapter, CassandraConnectionAdapter targetConnectionAdapter,
 			@Nullable MetricRegistry sourceConnectionMetricRegistry,
 			@Nullable MetricRegistry targetConnectionMetricRegistry) {
@@ -156,8 +157,10 @@ public class MigrateTableTask implements Runnable {
 		if (StringUtils.isBlank(name)) {
 			name = tableMigrationDefinition.targetTableName == null ? tableMigrationDefinition.tableName
 					: tableMigrationDefinition.tableName + "=>" + tableMigrationDefinition.targetTableName;
+			name = "#" + index + " - " + name;
 		}
 		this.name = name;
+		this.index = index;
 
 		this.tableMigrationDefinition = tableMigrationDefinition;
 		this.sourceConnectionAdapter = sourceConnectionAdapter;
@@ -187,8 +190,8 @@ public class MigrateTableTask implements Runnable {
 		if (retryStrategy == null) {
 			return;
 		}
-		Preconditions.checkArgument(retryStrategy.retryCount >= 0,
-				"Invalid '%s.retryCount' value - it must be >= 0", fieldName);
+		Preconditions.checkArgument(retryStrategy.retryCount >= 0, "Invalid '%s.retryCount' value - it must be >= 0",
+				fieldName);
 		Preconditions.checkArgument(retryStrategy.pauseMillisBetweenRetries >= 0,
 				"Invalid '%s.pauseMillisBetweenRetries' value - it must be >= 0", fieldName);
 		Preconditions.checkArgument(retryStrategy.exponentialPauseMultiplier >= 1,
@@ -263,6 +266,10 @@ public class MigrateTableTask implements Runnable {
 		LOG.info("MigratorPlugin is created! from {}", tableMigrationDefinition.migratorPluginDefinition);
 
 		return pluginInstance;
+	}
+
+	public int getIndex() {
+		return index;
 	}
 
 	public State getState() {
@@ -462,9 +469,9 @@ public class MigrateTableTask implements Runnable {
 	 * Fetches the next page for the given query + paging state.
 	 * <p>
 	 * Applies {@link #readRetryStrategy} first; if that is exhausted for a retryable failure, may
-	 * reduce {@link #effectivePageSize} via {@link #pageSizeReduceStrategy} and try again with the
-	 * same paging state. Does not advance past a failed page — caller keeps the paging state until
-	 * this returns successfully.
+	 * reduce {@link #effectivePageSize} via {@link #pageSizeReduceStrategy} and try again with the same
+	 * paging state. Does not advance past a failed page — caller keeps the paging state until this
+	 * returns successfully.
 	 */
 	private ResultSet fetchNextPage(SimpleStatement query, ByteBuffer pagingState) {
 		while (true) {

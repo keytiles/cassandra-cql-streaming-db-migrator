@@ -57,13 +57,15 @@ public class DbMigrator {
 			// let's prepare tasks - one / tables
 			LOG.info("preparing table migration tasks...");
 			Set<MigrateTableTask> failedInitTasks = new HashSet<>();
+			int idx = 1;
 			for (TableMigrationDefinition tableDef : config.tables) {
 				MigrateTableTask task = null;
 				try {
-					task = new MigrateTableTask(tableDef, sourceConnectionAdapter, targetConnectionAdapter,
+					task = new MigrateTableTask(idx, tableDef, sourceConnectionAdapter, targetConnectionAdapter,
 							sourceConnectionMetricRegistry, targetConnectionMetricRegistry);
 					task.setPrintStatusMessageSeconds(config.printStatusEveryXSeconds);
 					migrateTasks.add(task);
+					idx++;
 				} catch (Exception e) {
 					failedInitTasks.add(task);
 				}
@@ -99,8 +101,8 @@ public class DbMigrator {
 						: warnPrefix + Joiner.on(warnPrefix).join(taskWarnings);
 
 				LOG.info(
-						"task for table '{}': {}\n   - stats: took {}, rowsRead: {}, rowsPassedFiltering: {}, rowsMigrated (written to target): {}, rowsFailed: {}\n   - warnings: {}",
-						task.getTableDefinition().tableName, resultMsg, TimeUtil.millisToHumanReadableString(timeTook),
+						"task for '{}': {}\n   - stats: took {}, rowsRead: {}, rowsPassedFiltering: {}, rowsMigrated (written to target): {}, rowsFailed: {}\n   - warnings: {}",
+						task.getTableDefinition().name, resultMsg, TimeUtil.millisToHumanReadableString(timeTook),
 						task.getRowsRead(), task.getRowsPassedFilter(), task.getRowsMigrated(), task.getRowsFailed(),
 						warningsMsg);
 			}

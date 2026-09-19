@@ -5,6 +5,8 @@
  * Added `agents` folder and all other folders we use for AI assisted dev cycles. See https://github.com/keytiles/ai-agents for more details.
 
 ## New features:
+ * Improving final stat printing - until now we printed the tableName and the stats but thats bad as often we use same tables in a migration task just with different whereClause or filter.
+   From now we print the migration task name - which even gets the index as defined in the .yaml config file so better identify.
  * Introducing `TableMigrationDefinition.writeRetryStrategy`. Earlier we captured many times that certain rows were not migrated because of a probably temporary issue. But instead of waiting there
    a bit we moved on. This is especially annoying when we have a huge amount of data, worst is counter tables like time series. See `migration-config.example.yaml` for more details!
  * Introducing timeout configurability into config.sourceDB / config.targetDB - so far it was only constant 10s. See `migration-config.example.yaml` for more details!
