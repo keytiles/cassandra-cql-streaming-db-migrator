@@ -1,5 +1,6 @@
 package com.keytiles.db_migration;
 
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
@@ -23,17 +24,21 @@ import org.slf4j.LoggerFactory;
 import com.codahale.metrics.Histogram;
 import com.codahale.metrics.MetricRegistry;
 import com.codahale.metrics.SlidingTimeWindowReservoir;
+import com.datastax.oss.driver.api.core.NoNodeAvailableException;
 import com.datastax.oss.driver.api.core.cql.ResultSet;
 import com.datastax.oss.driver.api.core.cql.Row;
 import com.datastax.oss.driver.api.core.cql.SimpleStatement;
 import com.datastax.oss.driver.api.core.metadata.schema.KeyspaceMetadata;
 import com.datastax.oss.driver.api.core.metadata.schema.TableMetadata;
+import com.datastax.oss.driver.api.core.servererrors.ReadTimeoutException;
+import com.datastax.oss.driver.api.core.servererrors.UnavailableException;
 import com.datastax.oss.driver.api.core.servererrors.WriteTimeoutException;
 import com.google.common.base.Preconditions;
 import com.keytiles.db_migration.api.IMigratorPlugin;
 import com.keytiles.db_migration.api.IRowSetFilter;
 import com.keytiles.db_migration.cassandra.CassandraConnectionAdapter;
 import com.keytiles.db_migration.model.BaseEntity;
+import com.keytiles.db_migration.model.config.PageSizeReduceStrategy;
 import com.keytiles.db_migration.model.config.RetryStrategy;
 import com.keytiles.db_migration.model.config.TableDataFilterDefinition;
 import com.keytiles.db_migration.model.config.TableMigrationDefinition;
@@ -59,23 +64,27 @@ public class MigrateTableTask implements Runnable {
 
 	private final static long HISTOGRAMS_WINDOW_SECONDS = 60;
 
+	/**
+	 * Filters for this table migration, plus optional chunk size for filter/write batches.
+	 * {@code maxRowsBatchSize} is the minimum of configured filter {@code maxRowsBatchSize} values,
+	 * or {@code null} when no filter limits chunking (whole driver page is processed at once).
+	 */
 	private static class RowFilters extends BaseEntity {
-		private final int rowsProcessBatchSize;
 		private final List<IRowSetFilter> rowSetFilters;
+		private final Integer maxRowsBatchSize;
 
-		public RowFilters(int rowsProcessBatchSize, List<IRowSetFilter> rowSetFilters) {
-			this.rowsProcessBatchSize = rowsProcessBatchSize;
+		public RowFilters(List<IRowSetFilter> rowSetFilters, Integer maxRowsBatchSize) {
 			this.rowSetFilters = Collections.unmodifiableList(rowSetFilters);
-		}
-
-		public int getRowsProcessBatchSize() {
-			return rowsProcessBatchSize;
+			this.maxRowsBatchSize = maxRowsBatchSize;
 		}
 
 		public List<IRowSetFilter> getRowSetFilters() {
 			return rowSetFilters;
 		}
 
+		public Integer getMaxRowsBatchSize() {
+			return maxRowsBatchSize;
+		}
 	}
 
 	private final String name;
@@ -121,6 +130,16 @@ public class MigrateTableTask implements Runnable {
 	private final MetricRegistry targetConnectionMetricRegistry;
 
 	private final RetryStrategy writeRetryStrategy;
+	private final RetryStrategy readRetryStrategy;
+	private final PageSizeReduceStrategy pageSizeReduceStrategy;
+
+	/**
+	 * Effective page size for source reads — starts as configured {@code pageSize}, may shrink via
+	 * {@link #pageSizeReduceStrategy} and then stays reduced for later pages.
+	 */
+	private int effectivePageSize;
+	/** How many times page size was reduced so far in this task (capped by maxIteration). */
+	private int pageSizeReduceIterationsApplied;
 
 	public MigrateTableTask(TableMigrationDefinition tableMigrationDefinition,
 			CassandraConnectionAdapter sourceConnectionAdapter, CassandraConnectionAdapter targetConnectionAdapter,
@@ -155,17 +174,35 @@ public class MigrateTableTask implements Runnable {
 		metricRegistry.register("writeBatchTookMillis", writeBatchTookMillisHistogram);
 
 		writeRetryStrategy = tableMigrationDefinition.writeRetryStrategy;
-		if (writeRetryStrategy != null) {
-			// validate!
-			Preconditions.checkArgument(writeRetryStrategy.retryCount >= 0,
-					"Invalid 'writeRetryStrategy.retryCount' value - it must be >= 0");
-			Preconditions.checkArgument(writeRetryStrategy.pauseMillisBetweenRetries >= 0,
-					"Invalid 'writeRetryStrategy.pauseMillisBetweenRetries' value - it must be >= 0");
-			Preconditions.checkArgument(writeRetryStrategy.exponentialPauseMultiplier >= 1,
-					"Invalid 'writeRetryStrategy.exponentialPauseMultiplier' value - it must be >= 1");
-		}
+		validateRetryStrategy(writeRetryStrategy, "writeRetryStrategy");
+		readRetryStrategy = tableMigrationDefinition.readRetryStrategy;
+		validateRetryStrategy(readRetryStrategy, "readRetryStrategy");
+		pageSizeReduceStrategy = tableMigrationDefinition.pageSizeReduceStrategy;
+		validatePageSizeReduceStrategy(pageSizeReduceStrategy);
 
 		initialize();
+	}
+
+	private static void validateRetryStrategy(RetryStrategy retryStrategy, String fieldName) {
+		if (retryStrategy == null) {
+			return;
+		}
+		Preconditions.checkArgument(retryStrategy.retryCount >= 0,
+				"Invalid '%s.retryCount' value - it must be >= 0", fieldName);
+		Preconditions.checkArgument(retryStrategy.pauseMillisBetweenRetries >= 0,
+				"Invalid '%s.pauseMillisBetweenRetries' value - it must be >= 0", fieldName);
+		Preconditions.checkArgument(retryStrategy.exponentialPauseMultiplier >= 1,
+				"Invalid '%s.exponentialPauseMultiplier' value - it must be >= 1", fieldName);
+	}
+
+	private static void validatePageSizeReduceStrategy(PageSizeReduceStrategy strategy) {
+		if (strategy == null) {
+			return;
+		}
+		Preconditions.checkArgument(strategy.reducePageSizeFactor >= 2,
+				"Invalid 'pageSizeReduceStrategy.reducePageSizeFactor' value - it must be >= 2");
+		Preconditions.checkArgument(strategy.maxIteration >= 0,
+				"Invalid 'pageSizeReduceStrategy.maxIteration' value - it must be >= 0");
 	}
 
 	public void setPrintStatusMessageSeconds(long printStatusMessageSeconds) {
@@ -197,8 +234,7 @@ public class MigrateTableTask implements Runnable {
 
 	private RowFilters createRowsFilters(TableMigrationDefinition tableMigrationDefinition) {
 		List<IRowSetFilter> filters = new ArrayList<>();
-		// we will do a minimum search over this field - let's start from the page size
-		int rowsProcessBatchSize = tableMigrationDefinition.pageSize;
+		Integer maxRowsBatchSize = null;
 		if (tableMigrationDefinition.dataFilterDefinitions != null) {
 			for (TableDataFilterDefinition filterDefinition : tableMigrationDefinition.dataFilterDefinitions) {
 				IRowSetFilter filterInstance = filterDefinition.getPluginInstance(sourceTableMeta, targetTableMeta,
@@ -206,15 +242,14 @@ public class MigrateTableTask implements Runnable {
 						targetConnectionAdapter.getSession());
 				filters.add(filterInstance);
 				LOG.info("row set filter is created! from {}", filterDefinition);
-				// ... and the batch size is...
 				if (filterDefinition.maxRowsBatchSize != null
-						&& filterDefinition.maxRowsBatchSize < rowsProcessBatchSize) {
-					rowsProcessBatchSize = filterDefinition.maxRowsBatchSize;
+						&& (maxRowsBatchSize == null || filterDefinition.maxRowsBatchSize < maxRowsBatchSize)) {
+					maxRowsBatchSize = filterDefinition.maxRowsBatchSize;
 				}
 			}
 		}
 
-		return new RowFilters(rowsProcessBatchSize, filters);
+		return new RowFilters(filters, maxRowsBatchSize);
 	}
 
 	private IMigratorPlugin createMigratorPlugin(TableMigrationDefinition tableMigrationDefinition) {
@@ -303,63 +338,54 @@ public class MigrateTableTask implements Runnable {
 
 		millisSpentWithReading = 0;
 		millisSpentWithWriting = 0;
+		effectivePageSize = tableMigrationDefinition.pageSize;
+		pageSizeReduceIterationsApplied = 0;
 
 		writeExecutorService = Executors.newFixedThreadPool(tableMigrationDefinition.parallelWriteRowCount);
 
 		try {
 
-			// the read query
+			// Manual paging: each driver page is fetched explicitly via paging state.
+			// This avoids relying on ResultSet.iterator() auto-fetch (where hasNext() can throw
+			// on next-page read timeout) and makes page boundaries real for metrics/pause.
 			SimpleStatement query = migratorPlugin.getReadQuery();
+			ByteBuffer pagingState = null;
 
-			int rowsProcessBatchSize = rowSetFilters.getRowsProcessBatchSize();
+			while (!isMaxWriteRowCountReached()) {
+				// Fetch fails before this page is processed/written — safe to retry same paging state
+				ResultSet result = fetchNextPage(query, pagingState);
 
-			// we will collect up read rows into an array
-			List<Row> rowsFetched = new ArrayList<>(rowsProcessBatchSize);
-
-			ResultSet result = sourceConnectionAdapter.getSession().execute(query);
-			Iterator<Row> rowsIterator = result.iterator();
-			long pageFetchStarted = System.currentTimeMillis();
-			long millisSpentInWritesSinceLastPageFetch = 0;
-			long millisSpentInWaitingWritesSinceLastPageFetch = 0;
-			while (rowsIterator.hasNext() && !isMaxWriteRowCountReached()) {	// originally this was line 309
-
-				Row row = rowsIterator.next();
-				rowsFetched.add(row);
-				rowsRead++;
-
-				boolean pageSizeReached = rowsRead % tableMigrationDefinition.pageSize == 0;
-				if (pageSizeReached) {
-					long pageFetchTookMillis = System.currentTimeMillis() - pageFetchStarted
-							- millisSpentInWritesSinceLastPageFetch - millisSpentInWaitingWritesSinceLastPageFetch;
-					pageFetchMillisHistogram.update(pageFetchTookMillis);
-					millisSpentWithReading += pageFetchTookMillis;
-					millisSpentInWritesSinceLastPageFetch = 0;
-					millisSpentInWaitingWritesSinceLastPageFetch = 0;
-					pageFetchStarted = System.currentTimeMillis();
-
-					if (tableMigrationDefinition.pauseMillisBetweenPages > 0) {
-						LOG.info("{}: page is exhausted - taking a break... ({} msec)", name,
-								tableMigrationDefinition.pauseMillisBetweenPages);
-						ThreadUtil.waitMillis(tableMigrationDefinition.pauseMillisBetweenPages);
-						millisSpentInWaitingWritesSinceLastPageFetch += tableMigrationDefinition.pauseMillisBetweenPages;
+				// Consume only the already-fetched page. Do NOT use iterator()/all() —
+				// those auto-fetch the next page. Sync ResultSet has no currentPage() in
+				// driver 4.12; getAvailableWithoutFetching() + one() is the page-local API.
+				int rowsInPage = result.getAvailableWithoutFetching();
+				List<Row> pageRows = new ArrayList<>(rowsInPage);
+				for (int i = 0; i < rowsInPage; i++) {
+					Row row = result.one();
+					if (row == null) {
+						break;
 					}
+					pageRows.add(row);
+					rowsRead++;
 				}
 
-				// is the num of collected rows reached the batch size?
-				if (rowsFetched.size() == rowsProcessBatchSize) {
-					long writeStartedAt = System.currentTimeMillis();
-					migrateFetchedRows(rowsFetched);
-					// and let's start over
-					rowsFetched.clear();
-					millisSpentInWritesSinceLastPageFetch += System.currentTimeMillis() - writeStartedAt;
+				migratePageRows(pageRows);
+
+				pagingState = result.getExecutionInfo().getPagingState();
+				if (pagingState == null) {
+					break;
+				}
+
+				if (tableMigrationDefinition.pauseMillisBetweenPages > 0) {
+					LOG.debug("{}: page is exhausted - taking a break... ({} msec)", name,
+							tableMigrationDefinition.pauseMillisBetweenPages);
+					ThreadUtil.waitMillis(tableMigrationDefinition.pauseMillisBetweenPages);
 				}
 
 				if (System.currentTimeMillis() >= lastStatusPrintTime + printStatusMessageMillis) {
 					printStatusLog();
 				}
 			}
-			// we might have still rows to process...
-			migrateFetchedRows(rowsFetched);
 
 			if (isMaxWriteRowCountReached()) {
 				LOG.info("{}: maxWriteRowCount of {} reached - aborting...", name,
@@ -415,16 +441,145 @@ public class MigrateTableTask implements Runnable {
 		float pageFetchMillisMean = Math.round(pageFetchMillisHistogram.getSnapshot().getMean() * 100) / 100;
 		float writeBatchTookMillisMean = Math.round(writeBatchTookMillisHistogram.getSnapshot().getMean() * 100) / 100;
 		LOG.info(
-				"{}: started {} ago | time spent in reading/writing: {} (+{}) / {} (+{}) | pageFetchMean: {} msec (pageSize {}), writeBatchTookMean: {} msec (processBatchSize {}) - with sliding window {} secs",
+				"{}: started {} ago | time spent in reading/writing: {} (+{}) / {} (+{}) | pageFetchMean: {} msec (pageSize {}{}), writeBatchTookMean: {} msec (filterBatchSize {}) - with sliding window {} secs",
 				name, TimeUtil.millisToHumanReadableString(System.currentTimeMillis() - startedTimestamp),
 				TimeUtil.millisToHumanReadableString(millisSpentWithReading),
 				TimeUtil.millisToHumanReadableString(deltaMillisSpentWithReading),
 				TimeUtil.millisToHumanReadableString(millisSpentWithWriting),
 				TimeUtil.millisToHumanReadableString(deltaMillisSpentWithWriting), pageFetchMillisMean,
-				tableMigrationDefinition.pageSize, writeBatchTookMillisMean, rowSetFilters.rowsProcessBatchSize,
+				effectivePageSize > 0 ? effectivePageSize : tableMigrationDefinition.pageSize,
+				effectivePageSize > 0 && effectivePageSize != tableMigrationDefinition.pageSize
+						? " (configured " + tableMigrationDefinition.pageSize + ")"
+						: "",
+				writeBatchTookMillisMean,
+				rowSetFilters.getMaxRowsBatchSize() != null ? rowSetFilters.getMaxRowsBatchSize() : "n/a (full page)",
 				HISTOGRAMS_WINDOW_SECONDS);
 
 		lastStatusPrintTime = System.currentTimeMillis();
+	}
+
+	/**
+	 * Fetches the next page for the given query + paging state.
+	 * <p>
+	 * Applies {@link #readRetryStrategy} first; if that is exhausted for a retryable failure, may
+	 * reduce {@link #effectivePageSize} via {@link #pageSizeReduceStrategy} and try again with the
+	 * same paging state. Does not advance past a failed page — caller keeps the paging state until
+	 * this returns successfully.
+	 */
+	private ResultSet fetchNextPage(SimpleStatement query, ByteBuffer pagingState) {
+		while (true) {
+			try {
+				return executePageFetchWithReadRetries(query, pagingState, effectivePageSize);
+			} catch (IllegalStateException e) {
+				if (Thread.currentThread().isInterrupted() || e.getCause() instanceof InterruptedException) {
+					throw e;
+				}
+				Throwable cause = e.getCause();
+				if (!(cause instanceof Exception) || !isRetryableReadFailure((Exception) cause)) {
+					throw e;
+				}
+				if (!tryReduceEffectivePageSize()) {
+					throw e;
+				}
+				// same paging state, smaller page size, full read-retry budget again
+			}
+		}
+	}
+
+	/**
+	 * One full {@link #readRetryStrategy} cycle at the given page size.
+	 */
+	private ResultSet executePageFetchWithReadRetries(SimpleStatement query, ByteBuffer pagingState, int pageSize) {
+		RetryStrategy strategy = readRetryStrategy;
+		int retryCount = 0;
+		long pauseMillisBetweenRetries = 1000;
+		long multiplier = 1;
+		if (strategy != null) {
+			retryCount = strategy.retryCount;
+			pauseMillisBetweenRetries = strategy.pauseMillisBetweenRetries;
+			multiplier = strategy.exponentialPauseMultiplier;
+		}
+
+		Exception lastFailure = null;
+		while (retryCount >= 0) {
+			retryCount--;
+			long pageFetchStarted = System.currentTimeMillis();
+			try {
+				SimpleStatement pageQuery = query.setPageSize(pageSize);
+				if (pagingState != null) {
+					pageQuery = pageQuery.setPagingState(pagingState);
+				}
+				ResultSet result = sourceConnectionAdapter.getSession().execute(pageQuery);
+				long pageFetchTookMillis = System.currentTimeMillis() - pageFetchStarted;
+				pageFetchMillisHistogram.update(pageFetchTookMillis);
+				millisSpentWithReading += pageFetchTookMillis;
+				return result;
+			} catch (Exception e) {
+				lastFailure = e;
+				millisSpentWithReading += System.currentTimeMillis() - pageFetchStarted;
+
+				if (retryCount < 0) {
+					break;
+				}
+				if (!isRetryableReadFailure(e)) {
+					LOG.warn("{}: page fetch failed with non-retryable error - skipping readRetryStrategy", name, e);
+					break;
+				}
+
+				LOG.warn(
+						"{}: page fetch failed (pageSize {}) - will retry {} more time(s), now wait {} millis... cause: {}",
+						name, pageSize, retryCount, pauseMillisBetweenRetries, e.toString());
+				try {
+					Thread.sleep(pauseMillisBetweenRetries);
+				} catch (InterruptedException ie) {
+					Thread.currentThread().interrupt();
+					throw new IllegalStateException("page fetch interrupted while waiting to retry", ie);
+				}
+				pauseMillisBetweenRetries *= multiplier;
+			}
+		}
+
+		throw new IllegalStateException("page fetch failed after retries", lastFailure);
+	}
+
+	/**
+	 * @return true if effective page size was reduced and caller should retry the same paging state
+	 */
+	private boolean tryReduceEffectivePageSize() {
+		PageSizeReduceStrategy strategy = pageSizeReduceStrategy;
+		if (strategy == null || strategy.maxIteration <= 0) {
+			return false;
+		}
+		if (pageSizeReduceIterationsApplied >= strategy.maxIteration) {
+			LOG.warn("{}: pageSize reduce maxIteration {} already reached (effective pageSize {})", name,
+					strategy.maxIteration, effectivePageSize);
+			return false;
+		}
+
+		int newPageSize = effectivePageSize / strategy.reducePageSizeFactor;
+		if (newPageSize < 1 || newPageSize == effectivePageSize) {
+			LOG.warn("{}: cannot reduce pageSize further from {} with factor {}", name, effectivePageSize,
+					strategy.reducePageSizeFactor);
+			return false;
+		}
+
+		LOG.warn("{}: read retries exhausted at pageSize {} - reducing pageSize to {} (reduce iteration {}/{})", name,
+				effectivePageSize, newPageSize, pageSizeReduceIterationsApplied + 1, strategy.maxIteration);
+		effectivePageSize = newPageSize;
+		pageSizeReduceIterationsApplied++;
+		return true;
+	}
+
+	/**
+	 * Whether a failed page fetch is safe/sensible to retry. Failure happens before this page's rows
+	 * are processed or written, so retrying the same paging state is safe even for counter tables.
+	 */
+	private boolean isRetryableReadFailure(Exception failure) {
+		if (failure instanceof ReadTimeoutException || failure instanceof UnavailableException
+				|| failure instanceof NoNodeAvailableException) {
+			return true;
+		}
+		return failure.getClass().getName().toLowerCase().contains("timeout");
 	}
 
 	private TableMetadata discoverTableSchema(CassandraConnectionAdapter connectionAdapter, String tableName) {
@@ -444,6 +599,29 @@ public class MigrateTableTask implements Runnable {
 
 	private static class RowMigrationTask {
 
+	}
+
+	/**
+	 * Processes one driver page: optionally splits into filter-sized chunks when a filter declares
+	 * {@code maxRowsBatchSize}, otherwise migrates the whole page in one go.
+	 */
+	private void migratePageRows(List<Row> pageRows) {
+		if (pageRows.isEmpty() || isMaxWriteRowCountReached()) {
+			return;
+		}
+
+		Integer maxRowsBatchSize = rowSetFilters.getMaxRowsBatchSize();
+		if (maxRowsBatchSize == null || maxRowsBatchSize <= 0 || maxRowsBatchSize >= pageRows.size()) {
+			migrateFetchedRows(pageRows);
+			return;
+		}
+
+		int fromIndex = 0;
+		while (fromIndex < pageRows.size() && !isMaxWriteRowCountReached()) {
+			int toIndex = Math.min(fromIndex + maxRowsBatchSize, pageRows.size());
+			migrateFetchedRows(pageRows.subList(fromIndex, toIndex));
+			fromIndex = toIndex;
+		}
 	}
 
 	/**

@@ -140,6 +140,29 @@ public class TableMigrationDefinition extends BaseEntity {
 	 */
 	public RetryStrategy writeRetryStrategy;
 
+	/**
+	 * Retry strategy for source page fetches (e.g. read timeout). Applied by default because
+	 * retrying a failed page is safe: that page has not been processed/written yet (including
+	 * for counter tables).
+	 * <p>
+	 * Default: retryCount=1, pauseMillisBetweenRetries=3000, exponentialPauseMultiplier=2
+	 * (one 3s wait before the last attempt). Kept short on purpose — after that
+	 * {@link #pageSizeReduceStrategy} can shrink the page and try again. Set {@code retryCount: 0}
+	 * to disable retries.
+	 * <p>
+	 * Retries re-execute the same query with the same paging state (the failed page only).
+	 */
+	public RetryStrategy readRetryStrategy = new RetryStrategy(1, 3000, 2);
+
+	/**
+	 * After {@link #readRetryStrategy} is exhausted for a page fetch, optionally reduce the
+	 * effective page size and retry the same paging state. Smaller pages often succeed under load.
+	 * <p>
+	 * Default: reducePageSizeFactor=2, maxIteration=4 (e.g. 1000 → 500 → 250 → 125 → 62).
+	 * Set {@code maxIteration: 0} to disable. Reduced page size is kept for subsequent pages.
+	 */
+	public PageSizeReduceStrategy pageSizeReduceStrategy = new PageSizeReduceStrategy(2, 4);
+
 	public String getTargetTableName() {
 		if (targetTableName != null) {
 			return targetTableName;

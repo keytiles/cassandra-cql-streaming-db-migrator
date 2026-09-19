@@ -42,8 +42,9 @@ public class TableDataFilterDefinition {
 	public Map<String, Object> filterOptions;
 
 	/**
-	 * Controls maximum how many rows the filter can handle efficiently. If not set then the
-	 * {@link TableMigrationDefinition#pageSize} will be used
+	 * Optional. Maximum how many rows this filter should receive per call. If set (and smaller than
+	 * other filters' limits), the migrator splits each driver page into chunks of this size before
+	 * filter + write. If not set on any filter, the whole page is processed at once.
 	 */
 	public Integer maxRowsBatchSize;
 

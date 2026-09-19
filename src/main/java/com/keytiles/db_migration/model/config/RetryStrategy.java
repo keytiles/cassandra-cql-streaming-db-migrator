@@ -8,4 +8,13 @@ public class RetryStrategy extends BaseEntity {
 	public long pauseMillisBetweenRetries;
 	public long exponentialPauseMultiplier;
 
+	public RetryStrategy() {
+	}
+
+	public RetryStrategy(int retryCount, long pauseMillisBetweenRetries, long exponentialPauseMultiplier) {
+		this.retryCount = retryCount;
+		this.pauseMillisBetweenRetries = pauseMillisBetweenRetries;
+		this.exponentialPauseMultiplier = exponentialPauseMultiplier;
+	}
+
 }
