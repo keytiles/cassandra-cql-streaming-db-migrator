@@ -38,6 +38,11 @@ public class TableMigrationDefinition extends BaseEntity {
 	public String targetTableName;
 
 	/**
+	 * This is propagated internally after reading table metadata!!
+	 */
+	public boolean _isTargetCounterTable;
+
+	/**
 	 * Controls if the migration should be simulated only or real. As you can see this is set to TRUE by
 	 * default because this is the safest option to have (a half exited migration on large data can kill
 	 * us really especially if we can not just simply redo the stuff)
@@ -129,6 +134,11 @@ public class TableMigrationDefinition extends BaseEntity {
 	 * If a row migration fails what to do? Abort the full stuff? Or continue?
 	 */
 	public Boolean continueOnRowError;
+
+	/**
+	 * If row operation fails when writing the row then retry strategy jumps in if defined.
+	 */
+	public RetryStrategy writeRetryStrategy;
 
 	public String getTargetTableName() {
 		if (targetTableName != null) {

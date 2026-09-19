@@ -82,7 +82,6 @@ public class DefaultMigratorPlugin implements IMigratorPlugin {
 
 	protected Map<String, JavaTypeInfo> sourceTableColumnJavaTypes;
 	protected Map<String, JavaTypeInfo> targetTableColumnJavaTypes;
-	protected boolean isTargetCounterTable;
 
 	/**
 	 * The name of the column used to determine the TTL of row read from the source or NULL if TTL
@@ -121,7 +120,7 @@ public class DefaultMigratorPlugin implements IMigratorPlugin {
 
 		sourceTableColumnJavaTypes = CassandraSchemaUtil.getColJavaTypesByColumnNames(sourceTableMeta);
 		targetTableColumnJavaTypes = CassandraSchemaUtil.getColJavaTypesByColumnNames(targetTableMeta);
-		isTargetCounterTable = CassandraSchemaUtil.isCounterTable(targetTableMeta);
+		tableMigrationDefinition._isTargetCounterTable = CassandraSchemaUtil.isCounterTable(targetTableMeta);
 
 		if (tableMigrationDefinition.respectTTL) {
 			sourceTableTTL = CassandraSchemaUtil.getTableLevelTTL(sourceTableMeta);
@@ -228,7 +227,6 @@ public class DefaultMigratorPlugin implements IMigratorPlugin {
 
 		String targetTableName = tableMigrationDefinition.getTargetTableName();
 
-		boolean isTargetCounterTable = CassandraSchemaUtil.isCounterTable(targetTableMeta);
 		// boolean isSourceCounterTable = CassandraSchemaUtil.isCounterTable(sourceTableMeta);
 		// if source table is counter table then target also must be
 		// Preconditions.checkState(
@@ -306,7 +304,7 @@ public class DefaultMigratorPlugin implements IMigratorPlugin {
 
 			List<String> nonPkAssignments = new ArrayList<>();
 			for (String colName : targetTableNonPkColNames) {
-				if (isTargetCounterTable) {
+				if (tableMigrationDefinition._isTargetCounterTable) {
 					nonPkAssignments.add(colName + "=" + colName + "+:" + colName);
 				} else {
 					nonPkAssignments.add(colName + "=:" + colName);

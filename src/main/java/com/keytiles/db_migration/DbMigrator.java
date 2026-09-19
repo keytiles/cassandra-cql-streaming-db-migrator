@@ -123,6 +123,15 @@ public class DbMigrator {
 		CassandraConnectionAdapter connAdapter = new CassandraConnectionAdapter(name, dbDef.contactNodes,
 				dbDef.contactNodesDatacenterName, connectionMetricRegistry);
 		connAdapter.setDefaultKeyspaceName(dbDef.keyspaceName);
+		if (dbDef.requestTimeoutMillis != null) {
+			connAdapter.setRequestTimeout(dbDef.requestTimeoutMillis);
+		}
+		if (dbDef.firstPageTimeoutMillis != null) {
+			connAdapter.setContinousPagingTimeoutFirstPage(dbDef.firstPageTimeoutMillis);
+		}
+		if (dbDef.followingPagesTimeoutMillis != null) {
+			connAdapter.setContinousPagingTimeoutOtherPages(dbDef.followingPagesTimeoutMillis);
+		}
 		connAdapter.connect();
 		LOG.info("connection established!", name);
 		return connAdapter;

@@ -28,11 +28,13 @@ import com.datastax.oss.driver.api.core.cql.Row;
 import com.datastax.oss.driver.api.core.cql.SimpleStatement;
 import com.datastax.oss.driver.api.core.metadata.schema.KeyspaceMetadata;
 import com.datastax.oss.driver.api.core.metadata.schema.TableMetadata;
+import com.datastax.oss.driver.api.core.servererrors.WriteTimeoutException;
 import com.google.common.base.Preconditions;
 import com.keytiles.db_migration.api.IMigratorPlugin;
 import com.keytiles.db_migration.api.IRowSetFilter;
 import com.keytiles.db_migration.cassandra.CassandraConnectionAdapter;
 import com.keytiles.db_migration.model.BaseEntity;
+import com.keytiles.db_migration.model.config.RetryStrategy;
 import com.keytiles.db_migration.model.config.TableDataFilterDefinition;
 import com.keytiles.db_migration.model.config.TableMigrationDefinition;
 import com.keytiles.db_migration.util.ThreadUtil;
@@ -118,6 +120,8 @@ public class MigrateTableTask implements Runnable {
 	private final MetricRegistry sourceConnectionMetricRegistry;
 	private final MetricRegistry targetConnectionMetricRegistry;
 
+	private final RetryStrategy writeRetryStrategy;
+
 	public MigrateTableTask(TableMigrationDefinition tableMigrationDefinition,
 			CassandraConnectionAdapter sourceConnectionAdapter, CassandraConnectionAdapter targetConnectionAdapter,
 			@Nullable MetricRegistry sourceConnectionMetricRegistry,
@@ -149,6 +153,17 @@ public class MigrateTableTask implements Runnable {
 		writeBatchTookMillisHistogram = new Histogram(
 				new SlidingTimeWindowReservoir(HISTOGRAMS_WINDOW_SECONDS, TimeUnit.SECONDS));
 		metricRegistry.register("writeBatchTookMillis", writeBatchTookMillisHistogram);
+
+		writeRetryStrategy = tableMigrationDefinition.writeRetryStrategy;
+		if (writeRetryStrategy != null) {
+			// validate!
+			Preconditions.checkArgument(writeRetryStrategy.retryCount >= 0,
+					"Invalid 'writeRetryStrategy.retryCount' value - it must be >= 0");
+			Preconditions.checkArgument(writeRetryStrategy.pauseMillisBetweenRetries >= 0,
+					"Invalid 'writeRetryStrategy.pauseMillisBetweenRetries' value - it must be >= 0");
+			Preconditions.checkArgument(writeRetryStrategy.exponentialPauseMultiplier >= 1,
+					"Invalid 'writeRetryStrategy.exponentialPauseMultiplier' value - it must be >= 1");
+		}
 
 		initialize();
 	}
@@ -306,7 +321,7 @@ public class MigrateTableTask implements Runnable {
 			long pageFetchStarted = System.currentTimeMillis();
 			long millisSpentInWritesSinceLastPageFetch = 0;
 			long millisSpentInWaitingWritesSinceLastPageFetch = 0;
-			while (rowsIterator.hasNext() && !isMaxWriteRowCountReached()) {
+			while (rowsIterator.hasNext() && !isMaxWriteRowCountReached()) {	// originally this was line 309
 
 				Row row = rowsIterator.next();
 				rowsFetched.add(row);
@@ -457,7 +472,7 @@ public class MigrateTableTask implements Runnable {
 		while (rowsIterator.hasNext() && !isMaxWriteRowCountReached()) {
 			Row row = rowsIterator.next();
 			// creating a row write task and adding it to the list
-			writeRowTasks.add(new WriteRowTask(tableMigrationDefinition, migratorPlugin, row));
+			writeRowTasks.add(new WriteRowTask(tableMigrationDefinition, migratorPlugin, row, writeRetryStrategy));
 		}
 
 		// === Step 2 - now give them to the executor threads and wait for them to complete (or fail)
@@ -536,31 +551,96 @@ public class MigrateTableTask implements Runnable {
 		public final IMigratorPlugin migratorPlugin;
 		public final TableMigrationDefinition tableMigrationDefinition;
 		public final Row row;
+		private final RetryStrategy validatedWriteRetryStrategy;
 
-		public WriteRowTask(TableMigrationDefinition tableMigrationDefinition, IMigratorPlugin migratorPlugin,
-				Row row) {
+		public WriteRowTask(TableMigrationDefinition tableMigrationDefinition, IMigratorPlugin migratorPlugin, Row row,
+				RetryStrategy validatedWriteRetryStrategy) {
 			this.tableMigrationDefinition = tableMigrationDefinition;
 			this.migratorPlugin = migratorPlugin;
 			this.row = row;
+			this.validatedWriteRetryStrategy = validatedWriteRetryStrategy;
 		}
 
 		@Override
 		public Boolean call() throws Exception {
-			try {
-				return migratorPlugin.migrateRow(row);
-			} catch (Exception e) {
+
+			// 1 + 2 + 4 + 8 + 16 = 31s waiting time
+			int retryCount = 0;
+			long pauseMillisBetweenRetries = 1000;
+			long multiplier = 1;
+			if (validatedWriteRetryStrategy != null) {
+				retryCount = validatedWriteRetryStrategy.retryCount;
+				pauseMillisBetweenRetries = validatedWriteRetryStrategy.pauseMillisBetweenRetries;
+				multiplier = validatedWriteRetryStrategy.exponentialPauseMultiplier;
+			}
+
+			Exception failure = null;
+			while (retryCount >= 0) {
+				retryCount--;
+				failure = null;
+
+				try {
+					return migratorPlugin.migrateRow(row);
+				} catch (Exception e) {
+					failure = e;
+
+					if (retryCount >= 0) {
+						// hm... we failed...
+						// we need to figure out whether we apply retry strategy or not
+						boolean safeToRetry = isSafeToDoWriteRetry(failure);
+						if (safeToRetry) {
+							// OK its time to wait...
+							LOG.warn("row migration failed - will retry {} times, now wait {} millis...", retryCount,
+									pauseMillisBetweenRetries);
+							try {
+								Thread.sleep(pauseMillisBetweenRetries);
+							} catch (InterruptedException ie) {
+								// abort retries so Future.cancel(true) / shutdown can take effect
+								Thread.currentThread().interrupt();
+								break;
+							}
+							pauseMillisBetweenRetries *= multiplier;
+						} else {
+							LOG.warn(
+									"skipping retry policy - target table is counter table and isSafeToDoWriteRetry() classified it unsafe to retry this error!");
+						}
+
+					}
+				}
+
+			}
+			if (failure != null) {
 				String msg = "row migration failed with exception";
 				if (tableMigrationDefinition.continueOnRowError) {
 					// this just a warning then
-					LOG.warn(msg, e);
+					LOG.warn(msg, failure);
 				} else {
 					// now its an error
-					LOG.error(msg, e);
+					LOG.error(msg, failure);
 				}
-				throw new IllegalStateException(msg, e);
+				throw new IllegalStateException(msg, failure);
 			}
+
+			return true;
 		}
 
+		private boolean isSafeToDoWriteRetry(Exception failure) {
+			if (!tableMigrationDefinition._isTargetCounterTable) {
+				// on non counter tables it is - go
+				return true;
+			}
+
+			// so we have counter table...
+
+			// for now, classify any kind of timeout unsafe! Might be too much but let's be on safe side first
+			if ((failure instanceof WriteTimeoutException)
+					|| failure.getClass().getName().toLowerCase().contains("timeout")) {
+				// not a good idea if reason is timeout...
+				return false;
+			}
+
+			return true;
+		}
 	}
 
 	private boolean isMaxWriteRowCountReached() {

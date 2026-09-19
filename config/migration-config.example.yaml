@@ -1,6 +1,7 @@
 
 # Tool is capable of run table migrations (see below, "tables" entry) in parallel on worker threads
-# This value is the number of worker threads
+# This value is the number of worker threads. So if you set it to 3 e.g. then your first 3 `tables` will be executed
+# in parallel. (Not the data in the tables!!! 
 threadCount: 1
 
 # It's very useful to see time by time the table migration status
@@ -13,6 +14,12 @@ sourceDB:
   contactNodes: <source db host>:9042
   # you can use CQL: "select data_center from system.local;" to fetch the below
   contactNodesDatacenterName: <datacenter name of source db contactNodes>
+  # Optional. The generic timeout value. If not specified at all the default (10000) value is used.
+  requestTimeoutMillis: 10000
+  # Optional. If NULL/not set then `requestTimeoutMillis` (with default 10000) is used here. If set then the set value.
+  firstPageTimeoutMillis: 10000
+  # Optional. If NULL/not set then `requestTimeoutMillis` (with default 10000) is used here. If set then the set value.
+  followingPagesTimeoutMillis: 10000
 
 # setup the target database connection
 targetDB:
@@ -39,6 +46,14 @@ tables:
 #    insertOnlyIfNotExist: true|false
 #    readQueryTimeoutMillis: 10000
 #    writeQueryTimeoutMillis: 10000
+#
+#    // Optional. This affects writes. Kicks in when writing a row fails keeps that row repeating.
+#    // If you specify and target table is a counter table then migrator might decide to do NOT apply this still.
+#    // There is a deffensive policy since counter queries are not idempotent - in case of reason is timeout will be skipped.
+#    writeRetryStrategy:
+#      retryCount: 5
+#      pauseMillisBetweenRetries: 1000
+#      exponentialPauseMultiplier: 2
 #
 #    # The default is: com.keytiles.db_migration.implementation.DefaultMigratorPlugin
 #    # but of course you can use custom one too
@@ -79,6 +94,11 @@ tables:
     maxWriteRowCount: 2000
     simulateOnly: true
     continueOnRowError: true
+    retryStrategy:
+      # gives 100, 500, 2500, 14500
+      retryCount: 4
+      pauseMillisBetweenRetries: 100
+      exponentialPauseMultiplier: 5
 
 # Let's take the previous example, but this time what if you want to filter actually only on 'clust_key_col_2' column?
 # In CQL you are in trouble then but you can use the built in in-memory filtering for that!

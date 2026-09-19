@@ -186,6 +186,14 @@ public class CassandraConnectionAdapter implements Closeable {
 		OptionsMap driverOptions = OptionsMap.driverDefaults();
 
 		if (requestTimeout != null) {
+
+			Preconditions.checkArgument(requestTimeout >= 0, "'requestTimeout' can not be negative!");
+			Preconditions.checkArgument(continousPagingTimeoutFirstPage == null || continousPagingTimeoutFirstPage > 0,
+					"'continousPagingTimeoutFirstPage' must be >0");
+			Preconditions.checkArgument(
+					continousPagingTimeoutOtherPages == null || continousPagingTimeoutOtherPages > 0,
+					"'continousPagingTimeoutOtherPages' must be >0");
+
 			driverOptions.put(TypedDriverOption.REQUEST_TIMEOUT, Duration.ofMillis(requestTimeout));
 			driverOptions.put(TypedDriverOption.CONTINUOUS_PAGING_TIMEOUT_FIRST_PAGE, Duration.ofMillis(
 					continousPagingTimeoutFirstPage != null ? continousPagingTimeoutFirstPage : requestTimeout));

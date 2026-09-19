@@ -1,4 +1,11 @@
 
+# release 1.2.0
+
+## New features:
+ * Introducing `TableMigrationDefinition.writeRetryStrategy`. Earlier we captured many times that certain rows were not migrated because of a probably temporary issue. But instead of waiting there
+   a bit we moved on. This is especially annoying when we have a huge amount of data, worst is counter tables like time series. See `migration-config.example.yaml` for more details!
+ * Introducing timeout configurability into config.sourceDB / config.targetDB - so far it was only constant 10s. See `migration-config.example.yaml` for more details!
+
 # release 1.1.0
 
 ## Breaking changes:
