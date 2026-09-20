@@ -11,6 +11,9 @@
    a bit we moved on. This is especially annoying when we have a huge amount of data, worst is counter tables like time series. See `migration-config.example.yaml` for more details!
  * Introducing timeout configurability into config.sourceDB / config.targetDB - so far it was only constant 10s. See `migration-config.example.yaml` for more details!
  * Resilient source reads in `MigrateTableTask`: manual paging (paging state), default `readRetryStrategy`, and default `pageSizeReduceStrategy` so a mid-stream read timeout no longer aborts multi-million-row migrations. See `migration-config.example.yaml`.
+ * Table migration **task template** DSL: `${placeholders}` + `variables` lists expand (cartesian product, YAML-text substitute) into multiple concrete table tasks. Cap via `maxVariablesCartesianProductsPerTask` (default 16). See `docs/feature-TableMigrationTaskTemplate-v1.0.md`.
+ * Pre-start task-list confirmation (Y/N). Unattended/`nohup` runs must pass `-y` / `--yes`.
+ * Operator guides under `docs-user/`: how to start a migration, and a progressive YAML config guide (including `${variables}` templates).
 
 ## Bug fixes:
  * `ThreadUtil.waitMillis` now restores the thread interrupt flag after `InterruptedException` (so shutdown/cancel can take effect).

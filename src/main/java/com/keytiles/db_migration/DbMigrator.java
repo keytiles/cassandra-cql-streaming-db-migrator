@@ -11,6 +11,7 @@ import java.util.concurrent.TimeUnit;
 import javax.annotation.Nullable;
 
 import org.apache.commons.io.IOUtils;
+import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -29,6 +30,7 @@ public class DbMigrator {
 	private final static Logger LOG = LoggerFactory.getLogger(DbMigrator.class);
 
 	private final Config config;
+	private final boolean assumeYes;
 
 	private CassandraConnectionAdapter sourceConnectionAdapter;
 	private CassandraConnectionAdapter targetConnectionAdapter;
@@ -37,7 +39,12 @@ public class DbMigrator {
 	private final Set<MigrateTableTask> migrateTasks;
 
 	public DbMigrator(Config config) {
+		this(config, false);
+	}
+
+	public DbMigrator(Config config, boolean assumeYes) {
 		this.config = config;
+		this.assumeYes = assumeYes;
 
 		executorService = Executors.newScheduledThreadPool(config.threadCount);
 		migrateTasks = new LinkedHashSet<>();
@@ -61,6 +68,7 @@ public class DbMigrator {
 			for (TableMigrationDefinition tableDef : config.tables) {
 				MigrateTableTask task = null;
 				try {
+					assignName(idx, tableDef);
 					task = new MigrateTableTask(idx, tableDef, sourceConnectionAdapter, targetConnectionAdapter,
 							sourceConnectionMetricRegistry, targetConnectionMetricRegistry);
 					task.setPrintStatusMessageSeconds(config.printStatusEveryXSeconds);
@@ -74,6 +82,12 @@ public class DbMigrator {
 			// Do we have failed ones?
 			Preconditions.checkState(failedInitTasks.isEmpty(),
 					"Exiting migration as %s table migration task(s) have indicated issues...", failedInitTasks.size());
+
+			logTaskListSummary();
+			if (!StartConfirmation.confirmStart(assumeYes)) {
+				LOG.info("migration aborted by operator before scheduling tasks");
+				return;
+			}
 
 			LOG.info("scheduling table migration tasks... parallel processing is set to {} threads",
 					config.threadCount);
@@ -116,6 +130,35 @@ public class DbMigrator {
 		}
 
 		LOG.info("migration DONE!");
+	}
+
+	/**
+	 * Assigns {@link TableMigrationDefinition#name} used in logs/status: {@code #<index> - <label>}
+	 * plus {@code varVariant_<N>} when the def came from a variables template expansion.
+	 */
+	private static void assignName(int index, TableMigrationDefinition tableDef) {
+		String label;
+		if (StringUtils.isNotBlank(tableDef.name) && !tableDef.name.trim().startsWith("#")) {
+			label = tableDef.name.trim();
+		} else if (tableDef.targetTableName == null) {
+			label = tableDef.tableName;
+		} else {
+			label = tableDef.tableName + "=>" + tableDef.targetTableName;
+		}
+
+		StringBuilder name = new StringBuilder();
+		name.append('#').append(index).append(" - ").append(label);
+		if (tableDef._varVariantIndex != null) {
+			name.append(" varVariant_").append(tableDef._varVariantIndex);
+		}
+		tableDef.name = name.toString();
+	}
+
+	private void logTaskListSummary() {
+		LOG.info("Prepared {} table migration task(s):", migrateTasks.size());
+		for (MigrateTableTask task : migrateTasks) {
+			LOG.info("  - {}", task.getName());
+		}
 	}
 
 	private CassandraConnectionAdapter openConnection(String name, DBDefinition dbDef,

@@ -154,11 +154,8 @@ public class MigrateTableTask implements Runnable {
 				"defaultKeyspaceName is not set in targetConnectionAdapter! Please set it!");
 
 		String name = tableMigrationDefinition.name;
-		if (StringUtils.isBlank(name)) {
-			name = tableMigrationDefinition.targetTableName == null ? tableMigrationDefinition.tableName
-					: tableMigrationDefinition.tableName + "=>" + tableMigrationDefinition.targetTableName;
-			name = "#" + index + " - " + name;
-		}
+		Preconditions.checkArgument(StringUtils.isNotBlank(name),
+				"tableMigrationDefinition.name must be set by DbMigrator before creating MigrateTableTask");
 		this.name = name;
 		this.index = index;
 

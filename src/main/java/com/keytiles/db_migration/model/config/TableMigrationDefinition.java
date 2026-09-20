@@ -43,6 +43,13 @@ public class TableMigrationDefinition extends BaseEntity {
 	public boolean _isTargetCounterTable;
 
 	/**
+	 * Set by {@link TableMigrationTemplateExpander} when this definition was produced from a
+	 * {@code variables} cartesian expansion. {@code null} means a plain (non-templated) entry.
+	 * Value is the 0-based combination index within that template's expansion.
+	 */
+	public Integer _varVariantIndex;
+
+	/**
 	 * Controls if the migration should be simulated only or real. As you can see this is set to TRUE by
 	 * default because this is the safest option to have (a half exited migration on large data can kill
 	 * us really especially if we can not just simply redo the stuff)

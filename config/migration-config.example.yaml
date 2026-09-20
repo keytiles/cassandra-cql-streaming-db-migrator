@@ -7,6 +7,11 @@ threadCount: 1
 # The only question is: how often you want?
 printStatusEveryXSeconds: 10
 
+# Optional. Caps how many concrete tasks one templated `tables[]` entry may expand into via `variables`
+# cartesian product. Default is 16. Raise only if you intentionally need more slices.
+# See docs-user/config-guide-v1.0.md (and docs/feature-TableMigrationTaskTemplate-v1.0.md for internals)
+#maxVariablesCartesianProductsPerTask: 16
+
 # Setup the source database connection
 sourceDB:
   keyspaceName: <name of the Keyspace where the tables are>
@@ -163,3 +168,27 @@ tables:
               }
               hash %= 32;
               return (short) hash;"
+
+  # Template + variables: one YAML entry expands into N concrete tasks (cartesian product of the lists).
+  # Placeholders ${varName} are substituted as raw string pieces into the table-entry YAML (whereClause,
+  # filter mvelRule, etc.). See docs-user/config-guide-v1.0.md
+  # With the lists below this becomes 2 tasks (2 container sets x 1 key set).
+  - tableName: my_source_table_3
+    simulateOnly: true
+    continueOnRowError: true
+    pageSize: 1000
+    whereClause: "part_key_col_1 in (${partKeys}) and clust_key_col_1 in (${clustKeys})"
+    dataFilterDefinitions:
+      - filterClass: com.keytiles.db_migration.implementation.FieldValueFilter
+        filterOptions:
+          mvelRule: "row.clust_key_col_2 >= ${minClust2} && row.clust_key_col_2 < ${maxClust2}"
+    variables:
+      partKeys:
+        - "'abcd','efgh'"
+        - "'ijkl','mnop'"
+      clustKeys:
+        - "1,2,3"
+      minClust2:
+        - "3000"
+      maxClust2:
+        - "10000"
