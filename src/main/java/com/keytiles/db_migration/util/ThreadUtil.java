@@ -17,7 +17,9 @@ public class ThreadUtil {
 		try {
 			Thread.sleep(millis);
 		} catch (InterruptedException e) {
-			LOG.warn("exception while thread sleep...", e);
+			// sleep() clears the interrupt flag — restore it so callers / shutdown can react
+			Thread.currentThread().interrupt();
+			LOG.debug("sleep interrupted after requesting {} msec wait", millis);
 		}
 	}
 

@@ -29,7 +29,10 @@ public class Main {
 		Options opts = new Options() //
 				.addOption(Option.builder("h").desc("displays help").hasArg(false).build()) //
 				.addOption(Option.builder("configYaml").required().desc("path to the config .yaml file").hasArg(true)
-						.build());
+						.build()) //
+				.addOption(Option.builder("y").longOpt("yes")
+						.desc("assume yes: skip the interactive start confirmation (required for nohup / non-TTY)")
+						.hasArg(false).build());
 
 		CommandLineParser cmdParser = new DefaultParser();
 		CommandLine cmdLine;
@@ -43,10 +46,11 @@ public class Main {
 
 			// let's load the properties file
 			String configFilePath = cmdLine.getOptionValue("configYaml");
+			boolean assumeYes = cmdLine.hasOption("y");
 
 			Config config = Config.parseFromYamlFile(configFilePath);
 
-			DbMigrator migrator = new DbMigrator(config);
+			DbMigrator migrator = new DbMigrator(config, assumeYes);
 			migrator.migrate();
 
 		} catch (ParseException e) {

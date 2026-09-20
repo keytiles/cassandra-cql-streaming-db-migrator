@@ -7,6 +7,10 @@ You can use it to migrate table data between
  * Cassandra <-> ScyllaDB
  * ScyllaDB <-> ScyllaDB
 
+It is a standalone CLI jar driven by a YAML config: you define source/target DB and one or more table migrations, then it streams rows page-by-page (optional filters / transforms) into already-existing target tables — it does not migrate DDL. Table migrations can run in parallel (`threadCount`); within a table, writes can too.
+
+For the technical overview see [docs/architecture-v1.2.md](docs/architecture-v1.2.md).
+
 ## Licensing
 
 This code comes with [Apache License 2.0](https://opensource.org/licenses/Apache-2.0)
@@ -29,10 +33,13 @@ To use the tool:
    Visit: https://nexus.keytiles.com/nexus/content/repositories/public-releases/com/keytiles/cassandra-cql-streaming-db-migrator/
    
 1. Create a config file in .yaml format describing your migration setup  
-   Take a look into the [migration-config.example.yaml](config/migration-config.example.yaml) file to get inspired!
+   Take a look into the [migration-config.example.yaml](config/migration-config.example.yaml) file and the [config guide](docs-user/config-guide-v1.0.md)!
    
-1. Execute the tool! `java [-Xmx256M] -jar <the jar file path> -configYaml <your config .yaml path>`  
-   **Note:** if you run the tool in a machine sensitive to memory usage then really use the -Xmx (and/or other) Java options! 
+1. Execute the tool! See [docs-user/how-to-start-migration-v1.0.md](docs-user/how-to-start-migration-v1.0.md)  
+   Short form: `java [-Xmx256M] -jar <jar> -configYaml <yaml> [-y]`  
+   **Note:** if you run the tool in a machine sensitive to memory usage then really use the -Xmx (and/or other) Java options!  
+   **Note:** the tool prints the prepared task list and asks for confirmation before starting. For `nohup` / non-interactive runs pass `-y` (or `--yes`).  
+   Config walkthrough (including `${variables}` templates): [docs-user/config-guide-v1.0.md](docs-user/config-guide-v1.0.md).
 
 # Tips
 

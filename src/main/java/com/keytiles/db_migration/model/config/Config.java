@@ -6,21 +6,52 @@ import java.util.List;
 
 import com.fasterxml.jackson.core.exc.StreamReadException;
 import com.fasterxml.jackson.databind.DatabindException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import com.keytiles.db_migration.model.BaseEntity;
 
 public class Config extends BaseEntity {
 
+	public static final int DEFAULT_MAX_VARIABLES_CARTESIAN_PRODUCTS_PER_TASK = 16;
+
 	public static Config parseFromYamlFile(String filePath) throws StreamReadException, DatabindException, IOException {
 		ObjectMapper mapper = new ObjectMapper(new YAMLFactory());
-		Config config = mapper.readValue(new File(filePath), Config.class);
-		return config;
+		JsonNode root = mapper.readTree(new File(filePath));
+		return parseFromTree(mapper, root);
 	}
 
 	public static Config parseFromYaml(String yamlContent) throws StreamReadException, DatabindException, IOException {
 		ObjectMapper mapper = new ObjectMapper(new YAMLFactory());
-		Config config = mapper.readValue(yamlContent, Config.class);
+		JsonNode root = mapper.readTree(yamlContent);
+		return parseFromTree(mapper, root);
+	}
+
+	/**
+	 * Parses config from a YAML/JSON tree: expands {@code tables[]} templates first, then binds the
+	 * rest of the document to {@link Config}.
+	 */
+	static Config parseFromTree(ObjectMapper mapper, JsonNode root) throws DatabindException {
+		if (root == null || root.isNull() || !root.isObject()) {
+			throw new IllegalArgumentException("config root must be a YAML/JSON object");
+		}
+
+		int maxProducts = DEFAULT_MAX_VARIABLES_CARTESIAN_PRODUCTS_PER_TASK;
+		JsonNode maxProductsNode = root.get("maxVariablesCartesianProductsPerTask");
+		if (maxProductsNode != null && !maxProductsNode.isNull()) {
+			maxProducts = maxProductsNode.asInt();
+		}
+
+		List<TableMigrationDefinition> expandedTables = TableMigrationTemplateExpander.expandTables(mapper,
+				root.get("tables"), maxProducts);
+
+		// Bind Config without raw tables (may contain 'variables' unknown to TableMigrationDefinition)
+		ObjectNode rootCopy = ((ObjectNode) root).deepCopy();
+		rootCopy.set("tables", mapper.createArrayNode());
+		Config config = mapper.convertValue(rootCopy, Config.class);
+		config.tables = expandedTables;
+		config.maxVariablesCartesianProductsPerTask = maxProducts;
 		return config;
 	}
 
@@ -52,6 +83,13 @@ public class Config extends BaseEntity {
 	 * Displays migration status messages (how many rows fetched/migrated) in every this many seconds
 	 */
 	public long printStatusEveryXSeconds = 60;
+
+	/**
+	 * Maximum cartesian product size allowed when expanding one {@code tables[]} entry that declares
+	 * {@code variables}. Default {@value #DEFAULT_MAX_VARIABLES_CARTESIAN_PRODUCTS_PER_TASK}. Raise
+	 * explicitly if you intentionally need more parallel slices from one template.
+	 */
+	public int maxVariablesCartesianProductsPerTask = DEFAULT_MAX_VARIABLES_CARTESIAN_PRODUCTS_PER_TASK;
 
 	public Config() {
 	}

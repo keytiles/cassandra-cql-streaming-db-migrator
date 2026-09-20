@@ -1,11 +1,16 @@
-
 # Tool is capable of run table migrations (see below, "tables" entry) in parallel on worker threads
-# This value is the number of worker threads
+# This value is the number of worker threads. So if you set it to 3 e.g. then your first 3 `tables` will be executed
+# in parallel. (Not the data in the tables!!!
 threadCount: 1
 
 # It's very useful to see time by time the table migration status
 # The only question is: how often you want?
 printStatusEveryXSeconds: 10
+
+# Optional. Caps how many concrete tasks one templated `tables[]` entry may expand into via `variables`
+# cartesian product. Default is 16. Raise only if you intentionally need more slices.
+# See docs-user/config-guide-v1.0.md (and docs/feature-TableMigrationTaskTemplate-v1.0.md for internals)
+#maxVariablesCartesianProductsPerTask: 16
 
 # Setup the source database connection
 sourceDB:
@@ -13,6 +18,12 @@ sourceDB:
   contactNodes: <source db host>:9042
   # you can use CQL: "select data_center from system.local;" to fetch the below
   contactNodesDatacenterName: <datacenter name of source db contactNodes>
+  # Optional. The generic timeout value. If not specified at all the default (10000) value is used.
+  requestTimeoutMillis: 10000
+  # Optional. If NULL/not set then `requestTimeoutMillis` (with default 10000) is used here. If set then the set value.
+  firstPageTimeoutMillis: 10000
+  # Optional. If NULL/not set then `requestTimeoutMillis` (with default 10000) is used here. If set then the set value.
+  followingPagesTimeoutMillis: 10000
 
 # setup the target database connection
 targetDB:
@@ -23,66 +34,105 @@ targetDB:
 
 # List of table migrations
 tables:
-# The below contains all fields you can use in a table migration definition
-# For exact details which field means what - see com.keytiles.db_migration.model.config.TableMigrationDefinition class Javadoc!
-# 
-#  - tableName: <table name>
-#    targetTableName: <name of target table - if different>
-#    simulateOnly: true|false
-#    whereClause: <the where clause added to the query>
-#    maxReadRowCount: <max num of rows to read from source>
-#    maxWriteRowCount: <max num of rows to write to target>
-#    respectTTL: true|false
-#    pageSize: 1000
-#    pauseMillisBetweenPages: 100
-#    continueOnRowError: true|false
-#    insertOnlyIfNotExist: true|false
-#    readQueryTimeoutMillis: 10000
-#    writeQueryTimeoutMillis: 10000
+  # The below contains all fields you can use in a table migration definition
+  # For exact details which field means what - see com.keytiles.db_migration.model.config.TableMigrationDefinition class Javadoc!
+  #
+  #  - tableName: <table name>
+  #    targetTableName: <name of target table - if different>
+  #    simulateOnly: true|false
+  #    whereClause: <the where clause added to the query>
+  #    maxReadRowCount: <max num of rows to read from source>
+  #    maxWriteRowCount: <max num of rows to write to target>
+  #    respectTTL: true|false
+  #    pageSize: 1000
+  #    pauseMillisBetweenPages: 100
+  #    continueOnRowError: true|false
+  #    insertOnlyIfNotExist: true|false
+  #    readQueryTimeoutMillis: 10000
+  #    writeQueryTimeoutMillis: 10000
+  #
+#    // Optional. This affects writes. Kicks in when writing a row fails keeps that row repeating.
+#    // If you specify and target table is a counter table then migrator might decide to do NOT apply this still.
+#    // There is a deffensive policy since counter queries are not idempotent - in case of reason is timeout will be skipped.
+#    writeRetryStrategy:
+#      retryCount: 5
+#      pauseMillisBetweenRetries: 1000
+#      exponentialPauseMultiplier: 2
 #
-#    # The default is: com.keytiles.db_migration.implementation.DefaultMigratorPlugin
-#    # but of course you can use custom one too
-#    migratorPluginDefinition:
-#      migratorPluginClass: <fully qualified class name of plugin>
-#      migratorOptions:
-#        opt1: value1
-#        opt2: value2
-#    # Data filter is NULL by default so every row will make it
-#    dataFilterDefinitions:
-#      - filterClass: <fully qualified class name>
-#        filterOptions:
-#          opt1: value1
-#          opt2: value2
-#        maxRowsBatchSize: 100
-      
-# This is the simplest setup
-# Migrating all data of 'my_source_table_1' with default migration settings
+#    // Optional. Affects source page reads. Safe by default (failed page not written yet).
+#    // Default if omitted: retryCount=1, pauseMillisBetweenRetries=3000, exponentialPauseMultiplier=2
+#    // Set retryCount: 0 to disable. Override to tune for large migrations under load.
+#    // See docs/feature-MigrateTableTask-v1.1.md
+#    readRetryStrategy:
+#      retryCount: 1
+#      pauseMillisBetweenRetries: 3000
+#      exponentialPauseMultiplier: 2
+#
+#    // Optional. After read retries exhausted, reduce pageSize and retry same paging state.
+#    // Default if omitted: reducePageSizeFactor=2, maxIteration=4
+#    // (e.g. 1000->500->250->125->62). Set maxIteration: 0 to disable.
+#    // See docs/feature-MigrateTableTask-v1.1.md
+#    pageSizeReduceStrategy:
+#      reducePageSizeFactor: 2
+#      maxIteration: 4
+#
+  #    # The default is: com.keytiles.db_migration.implementation.DefaultMigratorPlugin
+  #    # but of course you can use custom one too
+  #    migratorPluginDefinition:
+  #      migratorPluginClass: <fully qualified class name of plugin>
+  #      migratorOptions:
+  #        opt1: value1
+  #        opt2: value2
+  #    # Data filter is NULL by default so every row will make it
+  #    dataFilterDefinitions:
+  #      - filterClass: <fully qualified class name>
+  #        filterOptions:
+  #          opt1: value1
+  #          opt2: value2
+  #        maxRowsBatchSize: 100
+
+  # This is the simplest setup
+  # Migrating all data of 'my_source_table_1' with default migration settings
   - tableName: my_source_table_1
     simulateOnly: false
     continueOnRowError: true
 
-# Similar but in the target DB we want our data in 'my_source_table_2_clone' table and not 'my_source_table_2'
-# This will also stop immediately if runs into any error due to 'continueOnRowError' setup
-# Instead of the default 'pageSize' (which is 1000) we want to go with bigger pages on this table 
+  # Similar but in the target DB we want our data in 'my_source_table_2_clone' table and not 'my_source_table_2'
+  # This will also stop immediately if runs into any error due to 'continueOnRowError' setup
+  # Instead of the default 'pageSize' (which is 1000) we want to go with bigger pages on this table
   - tableName: my_source_table_2
     targetTableName: my_source_table_2_clone
     simulateOnly: false
     pageSize: 5000
     continueOnRowError: false
 
-# This time we apply a 'whereClause' on our source table record
-# and also just simulate the migration (so the execution of writeQuery will be skipped) to get a feeling
-# plus we stop after 2000 rows would have been actually migrated (due to simulation it is not) to the target table
+  # This time we apply a 'whereClause' on our source table record
+  # and also just simulate the migration (so the execution of writeQuery will be skipped) to get a feeling
+  # plus we stop after 2000 rows would have been actually migrated (due to simulation it is not) to the target table
   - tableName: my_source_table_3
     #targetTableName: my_source_table_3_clone
     whereClause: part_key_col_1='abcd' AND clust_key_col_1 IN (1, 2, 3) AND clust_key_col_2 >= 3000 AND clust_key_col_2 < 10000
     maxWriteRowCount: 2000
     simulateOnly: true
     continueOnRowError: true
+    writeRetryStrategy:
+      # gives 100, 500, 2500, 14500
+      retryCount: 4
+      pauseMillisBetweenRetries: 100
+      exponentialPauseMultiplier: 5
+    readRetryStrategy:
+      # gives one 3s wait before the last attempt, then pageSizeReduceStrategy can kick in
+      retryCount: 1
+      pauseMillisBetweenRetries: 3000
+      exponentialPauseMultiplier: 2
+    pageSizeReduceStrategy:
+      # e.g. pageSize 1000 -> 500 -> 250 -> 125 -> 62 (at most 4 reductions)
+      reducePageSizeFactor: 2
+      maxIteration: 4
 
-# Let's take the previous example, but this time what if you want to filter actually only on 'clust_key_col_2' column?
-# In CQL you are in trouble then but you can use the built in in-memory filtering for that!
-# note: of course in this case you will stream through the full table...
+  # Let's take the previous example, but this time what if you want to filter actually only on 'clust_key_col_2' column?
+  # In CQL you are in trouble then but you can use the built in in-memory filtering for that!
+  # note: of course in this case you will stream through the full table...
   - tableName: my_source_table_3
     #targetTableName: my_source_table_3_clone
     #whereClause: part_key_col_1='abcd' AND clust_key_col_1 IN (1, 2, 3) AND clust_key_col_2 >= 3000 AND clust_key_col_2 < 10000
@@ -93,15 +143,15 @@ tables:
       - filterClass: com.keytiles.db_migration.implementation.FieldValueFilter
         filterOptions:
           mvelRule: row.clust_key_col_2 >= 3000 && row.clust_key_col_2 < 10000
-          
-# Last but not least even a more advanced sample - let's assume we added a numerical hashing field into one of our tables
-# and we want to migrate all data from the deprecated _v1 table into our new _v2 table where we actually want to compute
-# that hash. In this case it is possible to use the advanced feature of the DefaultMigratorPlugin (yes, the tool is
-# pluginnable, see interfaces defined in com.keytiles.db_migration.api package!)
-# So we have
-# - 'my_table_v1' who has 'my_col' VARCHAR column
-# - 'my_table_v2' who has 'my_col' VARCHAR column plus a numerical 0-31 hash computed from that column in 'my_col_hash' SMALLINT
-# then to migrate all data (which is not yet migrated - see 'insertOnlyIfNotExist' you can do this:
+
+  # Last but not least even a more advanced sample - let's assume we added a numerical hashing field into one of our tables
+  # and we want to migrate all data from the deprecated _v1 table into our new _v2 table where we actually want to compute
+  # that hash. In this case it is possible to use the advanced feature of the DefaultMigratorPlugin (yes, the tool is
+  # pluginnable, see interfaces defined in com.keytiles.db_migration.api package!)
+  # So we have
+  # - 'my_table_v1' who has 'my_col' VARCHAR column
+  # - 'my_table_v2' who has 'my_col' VARCHAR column plus a numerical 0-31 hash computed from that column in 'my_col_hash' SMALLINT
+  # then to migrate all data (which is not yet migrated - see 'insertOnlyIfNotExist' you can do this:
   - tableName: my_table_v1
     targetTableName: my_table_v2
     continueOnRowError: false
@@ -110,15 +160,35 @@ tables:
       migratorPluginClass: com.keytiles.db_migration.implementation.DefaultMigratorPlugin
       migratorOptions:
         calculatedColumns:
-        - columnName: my_col_hash
-          mvelExpression: '
-            int hash = row.my_col.hashCode();
-            if (hash < 0) {
+          - columnName: my_col_hash
+            mvelExpression: "
+              int hash = row.my_col.hashCode();
+              if (hash < 0) {
               hash *= -1;
-            }
-            hash %= 32;
-            return (short) hash;'
+              }
+              hash %= 32;
+              return (short) hash;"
 
-
-
-     
+  # Template + variables: one YAML entry expands into N concrete tasks (cartesian product of the lists).
+  # Placeholders ${varName} are substituted as raw string pieces into the table-entry YAML (whereClause,
+  # filter mvelRule, etc.). See docs-user/config-guide-v1.0.md
+  # With the lists below this becomes 2 tasks (2 container sets x 1 key set).
+  - tableName: my_source_table_3
+    simulateOnly: true
+    continueOnRowError: true
+    pageSize: 1000
+    whereClause: "part_key_col_1 in (${partKeys}) and clust_key_col_1 in (${clustKeys})"
+    dataFilterDefinitions:
+      - filterClass: com.keytiles.db_migration.implementation.FieldValueFilter
+        filterOptions:
+          mvelRule: "row.clust_key_col_2 >= ${minClust2} && row.clust_key_col_2 < ${maxClust2}"
+    variables:
+      partKeys:
+        - "'abcd','efgh'"
+        - "'ijkl','mnop'"
+      clustKeys:
+        - "1,2,3"
+      minClust2:
+        - "3000"
+      maxClust2:
+        - "10000"

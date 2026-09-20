@@ -38,6 +38,18 @@ public class TableMigrationDefinition extends BaseEntity {
 	public String targetTableName;
 
 	/**
+	 * This is propagated internally after reading table metadata!!
+	 */
+	public boolean _isTargetCounterTable;
+
+	/**
+	 * Set by {@link TableMigrationTemplateExpander} when this definition was produced from a
+	 * {@code variables} cartesian expansion. {@code null} means a plain (non-templated) entry.
+	 * Value is the 0-based combination index within that template's expansion.
+	 */
+	public Integer _varVariantIndex;
+
+	/**
 	 * Controls if the migration should be simulated only or real. As you can see this is set to TRUE by
 	 * default because this is the safest option to have (a half exited migration on large data can kill
 	 * us really especially if we can not just simply redo the stuff)
@@ -129,6 +141,34 @@ public class TableMigrationDefinition extends BaseEntity {
 	 * If a row migration fails what to do? Abort the full stuff? Or continue?
 	 */
 	public Boolean continueOnRowError;
+
+	/**
+	 * If row operation fails when writing the row then retry strategy jumps in if defined.
+	 */
+	public RetryStrategy writeRetryStrategy;
+
+	/**
+	 * Retry strategy for source page fetches (e.g. read timeout). Applied by default because
+	 * retrying a failed page is safe: that page has not been processed/written yet (including
+	 * for counter tables).
+	 * <p>
+	 * Default: retryCount=1, pauseMillisBetweenRetries=3000, exponentialPauseMultiplier=2
+	 * (one 3s wait before the last attempt). Kept short on purpose — after that
+	 * {@link #pageSizeReduceStrategy} can shrink the page and try again. Set {@code retryCount: 0}
+	 * to disable retries.
+	 * <p>
+	 * Retries re-execute the same query with the same paging state (the failed page only).
+	 */
+	public RetryStrategy readRetryStrategy = new RetryStrategy(1, 3000, 2);
+
+	/**
+	 * After {@link #readRetryStrategy} is exhausted for a page fetch, optionally reduce the
+	 * effective page size and retry the same paging state. Smaller pages often succeed under load.
+	 * <p>
+	 * Default: reducePageSizeFactor=2, maxIteration=4 (e.g. 1000 → 500 → 250 → 125 → 62).
+	 * Set {@code maxIteration: 0} to disable. Reduced page size is kept for subsequent pages.
+	 */
+	public PageSizeReduceStrategy pageSizeReduceStrategy = new PageSizeReduceStrategy(2, 4);
 
 	public String getTargetTableName() {
 		if (targetTableName != null) {
