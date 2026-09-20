@@ -268,6 +268,10 @@ public class MigrateTableTask implements Runnable {
 		return pluginInstance;
 	}
 
+	public String getName() {
+		return name;
+	}
+
 	public int getIndex() {
 		return index;
 	}

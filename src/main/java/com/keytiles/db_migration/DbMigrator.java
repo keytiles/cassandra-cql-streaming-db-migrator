@@ -102,9 +102,8 @@ public class DbMigrator {
 
 				LOG.info(
 						"task for '{}': {}\n   - stats: took {}, rowsRead: {}, rowsPassedFiltering: {}, rowsMigrated (written to target): {}, rowsFailed: {}\n   - warnings: {}",
-						task.getTableDefinition().name, resultMsg, TimeUtil.millisToHumanReadableString(timeTook),
-						task.getRowsRead(), task.getRowsPassedFilter(), task.getRowsMigrated(), task.getRowsFailed(),
-						warningsMsg);
+						task.getName(), resultMsg, TimeUtil.millisToHumanReadableString(timeTook), task.getRowsRead(),
+						task.getRowsPassedFilter(), task.getRowsMigrated(), task.getRowsFailed(), warningsMsg);
 			}
 
 		} catch (Throwable t) {
